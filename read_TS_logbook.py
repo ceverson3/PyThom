@@ -18,10 +18,23 @@ import requests                 # grabbing the TS logbook from google sheets
 r = requests.get('https://docs.google.com/spreadsheet/ccc?key=1yF7RMpYl_KvZPoEwYiH1D_vVrasaTGLuPvdBoYRRM84&output=csv')
 data = r.content
 df = pd.read_csv(BytesIO(data),usecols=np.arange(1,9))
+df = df.dropna(subset=['Shot','Plasma Species'])
+df_nodupes = df.drop_duplicates(subset=['Shot'])
+
+if(df.shape[0] != df_nodupes.shape[0]):
+    print("*****     WARNING! Duplicates detected while parsing TS logbook shots:     *****")
+    dupes = df.loc[df.duplicated(subset=['Shot'])]['Shot'].astype(int)
+    print(dupes.to_csv(sep='\t', index=False))
+    print("...excluding duplicates from parsed logbook.")
+
+df = df_nodupes
+
+df[[df.columns[0]]] = df[[df.columns[0]]].apply(pd.to_numeric,errors='coerce',downcast='integer')
+
+df[[df.columns[3]]].plot.hist(bins=50)
+# particular shot row:
+#sn = df.where(df['Shot'] == 190624005).dropna()
 
 
 
-a = df.head()
-print(df.shape)
-print(a)
 #df.dropna()[[df.columns[3]]].plot.hist(bins=100)
