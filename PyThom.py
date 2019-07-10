@@ -26,11 +26,16 @@ class Shot:
         pass
 
 def get_TS_logbook():
-#     get the logbook spreadsheet from google sheets and read it in to a pandas dataframe
+    
+#    get the logbook spreadsheet from google sheets and read it in to a pandas dataframe
     r = requests.get('https://docs.google.com/spreadsheet/ccc?key=1yF7RMpYl_KvZPoEwYiH1D_vVrasaTGLuPvdBoYRRM84&output=csv')
     data = r.content
     df = pd.read_csv(BytesIO(data),usecols=np.arange(1,9))
+    
+#    drop Nan's from gaps between run days and other non-shots
     df = df.dropna(subset=['Shot','Plasma Species'])
+    
+#    identify and get rid of duplicates if necessary
     df_nodupes = df.drop_duplicates(subset=['Shot'])
     
     if(df.shape[0] != df_nodupes.shape[0]):
@@ -41,14 +46,13 @@ def get_TS_logbook():
     
     df = df_nodupes
     
+    
+    
     df[[df.columns[0]]] = df[[df.columns[0]]].apply(pd.to_numeric,errors='coerce',downcast='integer')
     
     return(df)
     
 #    df[[df.columns[3]]].plot.hist(bins=50)
-#     particular shot row:
+#    particular shot row:
 #    sn = df.where(df['Shot'] == 190624005).dropna()
-    
-    
-    
 #    df.dropna()[[df.columns[3]]].plot.hist(bins=100)
