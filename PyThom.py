@@ -19,7 +19,7 @@ sns.set()
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
 hitConn = Connection('landau.hit')
-
+PLOTS_ON = 1
 
 class Shot(object):
     def __init__(self, sN):
@@ -31,6 +31,7 @@ class Shot(object):
 
     def preconditionData(self, parameter_list):
         pass
+
 
 
 def get_TS_logbook():
@@ -96,7 +97,9 @@ def update_energy_cal():
             print("WARNING: Error reading photodiode data from shot", ss)
             pass
 
-        flux_baseline = np.mean(flux_photodiode[0:np.int(np.around(np.size(flux_photodiode,0)/4))])
+        flux_baseline = np.mean(flux_photodiode[0:np.int(np.around(np.size(flux_photodiode,0)/6))])
+#        flux_baseline = np.mean(flux_photodiode[-np.int(np.around(np.size(flux_photodiode,0)/8)):])
+#        flux_baseline = 0
         flux_photodiode = flux_photodiode - flux_baseline
 
         energy_integrated = energy_integrated.append(pd.Series([np.trapz(flux_photodiode, flux_photodiode_t)]), ignore_index=True)
@@ -121,27 +124,29 @@ def update_energy_cal():
     m = regression_model.coef_
     c = regression_model.intercept_
     
-    # printing values
-#    print('Slope:' ,regression_model.coef_)
-#    print('Intercept:', regression_model.intercept_)
-#    print('Root mean squared error: ', rmse)
-#    print('R2 score: ', r2)
+    if(PLOTS_ON == 1):
+        # printing values
+        print('Slope:', m)
+        print('Intercept:', c)
+        print('Root mean squared error: ', rmse)
+        print('R2 score: ', r2)
     
         
-    fig1, ax1 = plt.subplots()
-    ax1.set_title("Linear regression")
-    ax1.set_xlabel(r"$E_{meter} [J]$")
-    ax1.set_ylabel(r"$E_{photodiode} [J]$")    
-    ax1.plot(energy_measured, energy_integrated, 'o', label='Original data', markersize=10)
-    ax1.plot(energy_measured, m*energy_measured + c, label='Fitted line')
-    ax1.legend()
-    ax1.grid(ls='--')
-    
-    print(1/m)
-    
-    fig2, (ax2, ax3) = plt.subplots(nrows=2, ncols=1) # two axes on figures
-    ax2.plot(flux_photodiode_t,flux_photodiode)
-    ax3.scatter(energy_measured, energy_integrated/m)
+        fig1, ax1 = plt.subplots()
+        ax1.set_title("Linear regression")
+        ax1.set_xlabel(r"$E_{meter} [J]$")
+        ax1.set_ylabel(r"$E_{photodiode} [J]$")    
+        ax1.plot(energy_measured, energy_integrated/m, 'o', label='Original data', markersize=10)
+        ax1.plot(np.arange(0,10), regression_model.predict(np.arange(0,10).reshape(-1,1))/m, label='Fitted line')
+        ax1.plot(np.arange(0,10), np.arange(0,10), color='k', ls='--', linewidth=0.5)
+        ax1.legend()
+        ax1.grid(ls='--')
+        
+        print(1/m)
+        
+        fig2, (ax2, ax3) = plt.subplots(nrows=2, ncols=1) # two axes on figures
+        ax2.plot(flux_photodiode_t,flux_photodiode)
+        ax3.scatter(energy_measured, energy_integrated/m)
     
 update_energy_cal()
     
