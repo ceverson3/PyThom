@@ -14,9 +14,10 @@ import pandas as pd               # large 2D dataframe operations
 import seaborn as sns             # colors!
 from io import BytesIO            # reading the TS logbook
 import requests                   # grabbing the TS logbook from google sheets
-from MDSplus import Connection
+from MDSplus import Connection    # MDSplus
 sns.set()
-
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error, r2_score
 hitConn = Connection('landau.hit')
 
 
@@ -84,7 +85,7 @@ def update_energy_cal():
     LB = get_TS_logbook()
     energy_measured = LB.Energy.dropna()
     inds = energy_measured.index
-    shots = LB.Shot.dropna()[inds]
+    shots = LB.Shot.dropna()[inds].to_numpy().reshape(-1,1)
     energy_integrated = pd.Series()
     for ss in shots:
         hitConn.openTree("hitsi3", ss)
@@ -100,14 +101,37 @@ def update_energy_cal():
 
         energy_integrated = energy_integrated.append(pd.Series([np.trapz(flux_photodiode, flux_photodiode_t)]), ignore_index=True)
 
-    A = np.transpose(np.array([energy_measured, (np.ones_like(energy_measured))]))
-    m, c = np.linalg.lstsq(A, energy_integrated,rcond=None)[0]
+#    A = np.transpose(np.array([energy_measured, (np.ones_like(energy_measured))]))
+#    m, c = np.linalg.lstsq(A, energy_integrated,rcond=None)[0]
+    energy_integrated = energy_integrated.to_numpy().reshape(-1,1) 
+    energy_measured = energy_measured.to_numpy().reshape(-1,1) 
+
+    # Model initialization
+    regression_model = LinearRegression()
     
+    # Fit the data(train the model)
+    regression_model.fit(energy_measured, energy_integrated)
     
+    # Predict
+    E_predicted = regression_model.predict(energy_measured)
+    
+    # model evaluation
+    rmse = mean_squared_error(energy_integrated, E_predicted)
+    r2 = r2_score(energy_integrated, E_predicted)
+    m = regression_model.coef_
+    c = regression_model.intercept_
+    
+    # printing values
+#    print('Slope:' ,regression_model.coef_)
+#    print('Intercept:', regression_model.intercept_)
+#    print('Root mean squared error: ', rmse)
+#    print('R2 score: ', r2)
+    
+        
     fig1, ax1 = plt.subplots()
     ax1.set_title("Linear regression")
-    ax1.set_xlabel(r"$E_{meter}$")
-    ax1.set_ylabel(r"$E_{photodiode}$")    
+    ax1.set_xlabel(r"$E_{meter} [J]$")
+    ax1.set_ylabel(r"$E_{photodiode} [J]$")    
     ax1.plot(energy_measured, energy_integrated, 'o', label='Original data', markersize=10)
     ax1.plot(energy_measured, m*energy_measured + c, label='Fitted line')
     ax1.legend()
