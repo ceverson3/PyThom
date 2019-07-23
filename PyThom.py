@@ -15,8 +15,7 @@ import pandas as pd               # large 2D dataframe operations
 import seaborn as sns             # colors!
 from io import BytesIO            # reading the TS logbook
 import requests                   # grabbing the TS logbook from google sheets
-from MDSplus import Connection
-from MDSplus import Tree
+from MDSplus import Connection, Tree, Data
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
 
@@ -29,7 +28,7 @@ def analyze_shot(shot_number):
     """
     Analyze the Thomson data for shot_number
     ----------
-    Does analysis in a frugal way that avoids duplicate analysis by writing to tree
+    Does analysis in a frugal way that avoids duplicate math by writing
     any incremental results to the analysis3 tree
 
     Returns
@@ -88,7 +87,7 @@ def get_ts_logbook(force_update=None):
 
     try:
         latest_ts_log = pd.read_csv(latest_filename)
-        if latest_ts_log['Shot'].iloc[-1] == raw_ts_log['Shot'].iloc[-1] and force_update == None:
+        if latest_ts_log['Shot'].iloc[-1] == raw_ts_log['Shot'].iloc[-1] and force_update is None:
             print('Using previously updated logbook...')
             return latest_ts_log
         else:
@@ -208,6 +207,8 @@ def get_spot_geometry(fiber_mount_string_in, jack_height_in):
     all_jack_heights = pd.DataFrame(data=[0.927, 1.000, 1.125, 1.250, 1.375, 1.500, 1.625, 1.750, 1.875], columns=['jack_height'])
 
     # each row in these dataframes corresponds to a different lab jack height:
+    # each column gives the distance in cm from the origin of the TS target onto which the fibers were backlit
+    # to the high or low edge of the spot (in the up/down lab frame of reference).
     spot_low_edge = pd.DataFrame(data=[[67.5, 70, 72, 74.5, 76.75, 79, 81.25, 83.5, 86, 88.25, 90.75],
                                        [67.25, 69.5, 72, 74, 76.5, 78.75, 81, 83.25, 85.5, 88, 90],
                                        [66, 68.5, 71, 73.25, 75.5, 77.75, 80, 82.5, 84.5, 87, 89.5],
@@ -368,6 +369,241 @@ def update_energy_cal(log_book):
 #        fig2, (ax2, ax3) = plt.subplots(nrows=2, ncols=1) # two axes on figures
 #        ax2.plot(flux_photodiode_t,flux_photodiode)
 #        ax3.scatter(energy_measured, energy_integrated/m)
+
+
+def tree_write_safe(data_to_write, tag_name, dim=None, tree=None):
+    """
+    If the node exists, write the data to that node, including its independent variable (often time or wavelength).
+    If the node does not exist, create it and then write the data.
+
+    Parameters
+    ----------
+    data_to_write
+    dim, the independent variable of data_to_write if necessary
+    tag_name
+    tree
+
+    Returns
+    -------
+    """
+
+    if tree is None:
+        # t = MDSplus.Tree('analysis3',-1).createPulse(shot=888)    # to create a new practice tree
+        tree = Tree('analysis3', 888, 'EDIT')
+    try:
+        node_to_write = tree.getNode('\\' + tag_name)
+    except Exception as ex:
+        if ex.msgnam == 'NNF':
+            add_node_safe(tag_name, tree)
+        else:
+            template = 'An exception of type {0} occurred. Arguments:\n{1!r}'
+            message = template.format(type(ex).__name__, ex.args)
+            print(message)
+            return -1
+
+    node_to_write = tree.getNode('\\' + tag_name)
+    # then write the data based on what type or "usage" it is (MDSplus terminology)
+    node_usage = node_to_write.getUsage()
+    node_units = thomson_tree_lookup['Units'][thomson_tree_lookup['Tag'] == tag_name].values[0]
+    node_dim_units = thomson_tree_lookup['dim_Units'][thomson_tree_lookup['Tag'] == tag_name].values[0]
+
+    if node_usage == 'SIGNAL' and dim is None:
+        write_string = "BUILD_SIGNAL(BUILD_WITH_UNITS($1,'" + node_units + "'), $1)"
+        expr = Data.compile(write_string, data_to_write)
+        node_to_write.putData(expr)
+
+    elif node_usage == 'SIGNAL':
+        write_string = "BUILD_SIGNAL(BUILD_WITH_UNITS($1,'" + node_units + "'), $1, BUILD_WITH_UNITS($2,'" + node_dim_units + "'))"
+        expr = Data.compile(write_string, data_to_write, dim)
+        node_to_write.putData(expr)
+
+    elif node_usage == 'NUMERIC':
+        node_to_write.putData(data_to_write)
+        node_to_write.setUnits(str(node_units))
+
+    else:
+        print('**** DATA TYPE NOT RECOGNIZED ****')
+        return(-1)
+
+    tree.write()
+
+
+def add_node_safe(tag_name_in, tree):
+    """
+    Add a node specified by the input tag to the analysis3 tree (default tree is a test tree, shot 888) and include all
+    of the parameters as specified in the matching node of the model tree
+    Parameters
+    ----------
+    tag_name_in: unique tag name to determine node
+    tree: tree to add node to
+
+    Returns
+    -------
+    """
+
+    try:
+        node_string = '\\' + thomson_tree_lookup['Path'][thomson_tree_lookup['Tag'] == tag_name_in].values[0]
+    except Exception as ex:
+        if str(ex.args) == "('index 0 is out of bounds for axis 0 with size 0',)":
+            print('!*!*!*!*! INVALID TAG NAME !*!*!*!*!*! \nCheck global variable thomson_tree_lookup or tag_name_in in function add_node_safe(). ')
+        else:
+            print('***ERROR in add_node_safe()***')
+
+    node_usage = thomson_tree_lookup['Usage'][thomson_tree_lookup['Tag'] == tag_name_in].values[0]
+
+    # then add appropriate nodes (recursive?) until all parent (type 'STRUCTURE') nodes are built
+    try:
+        tree.addNode(node_string, node_usage).addTag(tag_name_in)
+    except Exception as ex:
+        if ex.msgnam == 'NNF':
+            add_parent(node_string, tree)
+            tree.addNode(node_string, node_usage).addTag(tag_name_in)
+        elif ex.msgnam == 'ALREADY_THERE':
+            print("Node " + node_string + " already exists in the tree: " + str(tree))
+            pass
+        else:
+            template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+            message = template.format(type(ex).__name__, ex.args)
+            print(message)
+            return -1
+
+    node = tree.getNode(node_string)
+    node.setUsage(node_usage)
+
+    tree.write()
+
+
+def add_parent(node_name_in, tree):
+    """
+    Recursively adds the parent and grandparent nodes necessary up to the immediate parent of node_name_in.
+    
+    Parameters
+    ----------
+    node_name_in: node name full path off of which the last node is stripped to form parent_string
+    tree: tree to add node to
+    
+    Returns
+    -------
+    """
+    parent_string = node_name_in.rsplit(sep='.', maxsplit=1)[0]
+
+    try:
+        tree.addNode(parent_string, 'STRUCTURE')
+        tree.write()
+    except Exception as ex:
+        if ex.msgnam == 'NNF':
+            add_parent(parent_string, tree)
+        tree.addNode(parent_string, 'STRUCTURE')
+        tree.write()
+
+
+
+# 	t = MDSplus.Tree('analysis3',shot,'EDIT')
+# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1','SIGNAL').addTag("N_C1")
+# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.COMMENT','TEXT')
+# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.FILT_BW','NUMERIC').addTag("C1_FILT_BW")
+# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.FILT_CENTER','NUMERIC').addTag("C1_FILT_CENTER")
+# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.SCENE_FREQ','NUMERIC').addTag("C1_FREQ")
+# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.P_ERR','SIGNAL').addTag("N_C1_P_ERR")
+# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.N_ERR','SIGNAL').addTag("N_C1_N_ERR")
+# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.REF_FREQ','NUMERIC').addTag("REF_FREQ")
+# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.REF_FILT_BW','NUMERIC').addTag("REF_FILT_BW")
+
+# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1')
+# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.COMMENT')
+# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.FILT_BW')
+# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.FILT_CENTER')
+# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.SCENE_FREQ')
+# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.P_ERR')
+# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.N_ERR')
+# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.REF_FREQ')
+# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.REF_FILT_BW')
+
+
+#         hitConn.closeAllTrees()
+#         if(PDC == 0):
+#             tr = Tree("ANALYSIS3",shot,"EDIT")
+#         else:
+#             tr = Tree("ANALYSISPDC3",shot,"EDIT")
+# #            windStr = "Build_Window(0, " + np.str(len(t[ci])-1) + ", 0)"
+# #            dimStr = "Build_Dim(" + windStr + ",*:*:" + np.str(t[ci][1]-t[ci][0]) + ")"
+# #            TDIline = r"Build_Signal(Build_With_Units($,'m^-3'),*,Build_With_Units(" + dimStr + ",'s'))"
+# #            nodeName = r'\N_C1'
+#         node = tr.getNode('DENSITY.FIR.N_AVG_C1')
+#         expr = Data.compile("BUILD_SIGNAL(BUILD_WITH_UNITS($1,'m^-3'), $1, BUILD_WITH_UNITS($2,'s'))", density[ci], t[ci])
+# #            node.setUnits('m^-3')
+#         node.putData(expr)
+        
+#         node = tr.getNode('DENSITY.FIR.N_AVG_C1.P_ERR')
+#         expr = Data.compile("BUILD_SIGNAL(BUILD_WITH_UNITS($1,'m^-3'), $1, BUILD_WITH_UNITS($2,'s'))", error_pos_sum[ci], t[ci])
+#         node.putData(expr)            
+
+#         node = tr.getNode('DENSITY.FIR.N_AVG_C1.N_ERR')
+#         expr = Data.compile("BUILD_SIGNAL(BUILD_WITH_UNITS($1,'m^-3'), $1, BUILD_WITH_UNITS($2,'s'))", error_neg_sum[ci], t[ci])
+#         node.putData(expr)
+        
+#         node = tr.getNode('DENSITY.FIR.N_AVG_C1.FILT_BW')
+#         node.setUnits('Hz')
+#         node.putData(filter_width[1])
+        
+#         node = tr.getNode('DENSITY.FIR.N_AVG_C1.FILT_CENTER')
+#         node.setUnits('Hz')
+#         node.putData(filter_center[1])
+        
+#         node = tr.getNode('DENSITY.FIR.N_AVG_C1.SCENE_FREQ')
+#         node.setUnits('Hz')
+#         node.putData(freq[1])
+        
+#         node = tr.getNode('DENSITY.FIR.REF_FREQ')
+#         node.setUnits('Hz')
+#         node.putData(freq[0])            
+        
+#         node = tr.getNode('DENSITY.FIR.REF_FILT_BW')
+#         node.setUnits('Hz')
+#         node.putData(filter_width[0])
+
+# thomson analysis tree variable definitions:
+thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CHAN_POLY_2_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2.TRANS_1', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CHAN_POLY_2_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2.TRANS_2', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CHAN_POLY_2_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2.TRANS_3', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CHAN_POLY_2_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2.VARIANCE_1', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CHAN_POLY_2_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2.VARIANCE_2', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CHAN_POLY_2_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2.VARIANCE_3', 'SIGNAL', '', 'm'],
+                                         ['ENERGY', 'ANALYSIS3::TOP.THOMSON.LASER_ENERGY', 'NUMERIC', 'J', '']],
+                                         columns=['Tag', 'Path', 'Usage', 'Units', 'dim_Units'])
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

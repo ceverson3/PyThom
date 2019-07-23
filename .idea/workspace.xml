@@ -2,6 +2,7 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="d6d201dc-169a-4e11-9ca6-665bb642cc46" name="Default Changelist" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.~lock.TS_logbook_autogen_2019-07-16.csv#" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/PyThom.py" beforeDir="false" afterPath="$PROJECT_DIR$/PyThom.py" afterDir="false" />
     </list>
@@ -16,8 +17,8 @@
       <file pinned="false" current-in-tab="true">
         <entry file="file://$PROJECT_DIR$/PyThom.py">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="314">
-              <caret line="41" column="4" lean-forward="true" selection-start-line="41" selection-start-column="4" selection-end-line="41" selection-end-column="4" />
+            <state relative-caret-position="563">
+              <caret line="449" lean-forward="true" selection-start-line="449" selection-end-line="449" />
               <folding>
                 <element signature="e#120#164#0" expanded="true" />
               </folding>
@@ -85,10 +86,11 @@
     </panes>
   </component>
   <component name="PropertiesComponent">
+    <property name="SHARE_PROJECT_CONFIGURATION_FILES" value="true" />
     <property name="WebServerToolWindowFactoryState" value="false" />
     <property name="last_opened_file_path" value="$PROJECT_DIR$" />
     <property name="nodejs_interpreter_path.stuck_in_default_project" value="undefined stuck path" />
-    <property name="settings.editor.selected.configurable" value="Settings.JavaScript.Linters.JSLint" />
+    <property name="settings.editor.selected.configurable" value="reference.settingsdialog.IDE.editor.colors" />
   </component>
   <component name="PyConsoleOptionsProvider">
     <option name="myPythonConsoleState">
@@ -115,6 +117,9 @@
       <module name="PyThom" />
       <option name="INTERPRETER_OPTIONS" value="" />
       <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
       <option name="SDK_HOME" value="/anaconda3/bin/python" />
       <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
       <option name="IS_MODULE_SDK" value="false" />
@@ -164,12 +169,14 @@
       <option name="presentableId" value="Default" />
       <updated>1563412079066</updated>
       <workItem from="1563412084066" duration="3876000" />
-      <workItem from="1563423130767" duration="2318000" />
+      <workItem from="1563423130767" duration="2320000" />
+      <workItem from="1563654857000" duration="55000" />
+      <workItem from="1563654953448" duration="1437000" />
     </task>
     <servers />
   </component>
   <component name="TimeTrackingManager">
-    <option name="totallyTimeSpent" value="6194000" />
+    <option name="totallyTimeSpent" value="7688000" />
   </component>
   <component name="ToolWindowManager">
     <frame x="0" y="23" width="1440" height="877" extended-state="6" />
@@ -181,8 +188,8 @@
       <window_info anchor="bottom" id="Version Control" order="0" />
       <window_info anchor="bottom" id="Database Changes" order="1" />
       <window_info anchor="bottom" id="Terminal" order="2" />
-      <window_info anchor="bottom" id="Event Log" order="3" side_tool="true" />
-      <window_info active="true" anchor="bottom" x="0" y="45" width="1440" height="855" id="Python Console" order="4" type="WINDOWED" visible="true" weight="0.3299363" />
+      <window_info anchor="bottom" id="Event Log" order="3" side_tool="true" weight="0.3299363" />
+      <window_info anchor="bottom" x="0" y="45" width="1440" height="855" id="Python Console" order="4" type="WINDOWED" weight="0.3299363" />
       <window_info anchor="bottom" id="Docker" order="5" show_stripe_button="false" />
       <window_info anchor="bottom" id="Message" order="6" />
       <window_info anchor="bottom" id="Find" order="7" />
@@ -233,8 +240,8 @@
   <component name="editorHistoryManager">
     <entry file="file://$PROJECT_DIR$/PyThom.py">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="314">
-          <caret line="41" column="4" lean-forward="true" selection-start-line="41" selection-start-column="4" selection-end-line="41" selection-end-column="4" />
+        <state relative-caret-position="563">
+          <caret line="449" lean-forward="true" selection-start-line="449" selection-end-line="449" />
           <folding>
             <element signature="e#120#164#0" expanded="true" />
           </folding>
