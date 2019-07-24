@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt   # plotting
 import datetime
 import numpy as np                # math
 import scipy.signal as sig        # signal math
+from scipy.io import loadmat      # for loading matlab files
 import pandas as pd               # large 2D dataframe operations
 import seaborn as sns             # colors!
 from io import BytesIO            # reading the TS logbook
@@ -19,7 +20,9 @@ from MDSplus import Connection, Tree, Data
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
 
+
 PLOTS_ON = 1
+photodiode_baseline_record_fraction = 0.15 # the fraction of the ruby photodiode record to take as the baseline
 style = 'Freq'  # 'Bayes' for Bayesian analysis or 'Freq' for frequentist/ratio evaluation method
 sns.set()   # Set the plotting theme
 
@@ -38,9 +41,8 @@ def analyze_shot(shot_number):
     #   parameters used in the analysis code are found and written here
     log_book = get_ts_logbook()
 
-    #
-
     # calculate and store the laser energy
+    
 
     # calculate and store the electron energy distribution function,
     # including temperature, density, and electron drift velocity
@@ -51,15 +53,12 @@ def get_ts_logbook(force_update=None):
     """
     Pull in the logbook information from the TS_Logbook Google sheet, parse it, and return a version of it
     for use in the TS analysis.
-    If
     ----------
     (none)
 
     Returns
     -------
     """
-
-
 
     # get the logbook spreadsheet from google sheets and read it in to a pandas dataframe
     raw_google_csv = requests.get(
@@ -158,7 +157,7 @@ def get_ts_logbook(force_update=None):
                 i_tor_max[ctr] = np.max(i_tor)
             else:
                 i_tor_max[ctr] = np.min(i_tor)
-        except:
+        except Exception as ex:
             print('No i_tor data for shot '+str(shot))
             i_tor_max[ctr] = np.nan
         ctr = ctr + 1
@@ -177,7 +176,6 @@ def get_spot_geometry(fiber_mount_string_in, jack_height_in):
     """
     Gives geometry info for the spot specified by the lab jack height and the mount position of the fibers
     ----------
-
     Parameters
     ----------
     fiber_mount_string_in
@@ -314,9 +312,7 @@ def update_energy_cal(log_book):
             return -1
             pass
 
-        flux_baseline = np.mean(flux_photodiode[0:np.int(np.around(np.size(flux_photodiode, 0)/6))])
-        #        flux_baseline = np.mean(flux_photodiode[-np.int(np.around(np.size(flux_photodiode,0)/8)):])
-        #        flux_baseline = 0
+        flux_baseline = np.mean(flux_photodiode[0:np.int(np.around(np.size(flux_photodiode, 0)*photodiode_baseline_record_fraction))])
         flux_photodiode = flux_photodiode - flux_baseline
 
         energy_integrated = energy_integrated.append(pd.Series([np.trapz(flux_photodiode, flux_photodiode_t)]), ignore_index=True)
@@ -366,6 +362,7 @@ def update_energy_cal(log_book):
 
         print(1/m)
 
+    tree_write_safe(1/m, 'LASER_E_FAC')
 #        fig2, (ax2, ax3) = plt.subplots(nrows=2, ncols=1) # two axes on figures
 #        ax2.plot(flux_photodiode_t,flux_photodiode)
 #        ax3.scatter(energy_measured, energy_integrated/m)
@@ -389,6 +386,7 @@ def tree_write_safe(data_to_write, tag_name, dim=None, tree=None):
 
     if tree is None:
         # t = MDSplus.Tree('analysis3',-1).createPulse(shot=888)    # to create a new practice tree
+        # TODO: change the "888" in the line below to "-1" when this code is ready for primetime.
         tree = Tree('analysis3', 888, 'EDIT')
     try:
         node_to_write = tree.getNode('\\' + tag_name)
@@ -450,12 +448,12 @@ def add_node_safe(tag_name_in, tree):
             print('***ERROR in add_node_safe()***')
 
     node_usage = thomson_tree_lookup['Usage'][thomson_tree_lookup['Tag'] == tag_name_in].values[0]
-
     # then add appropriate nodes (recursive?) until all parent (type 'STRUCTURE') nodes are built
     try:
         tree.addNode(node_string, node_usage).addTag(tag_name_in)
     except Exception as ex:
         if ex.msgnam == 'NNF':
+            print('Parent node for ' + node_string + ' not in tree, creating...')
             add_parent(node_string, tree)
             tree.addNode(node_string, node_usage).addTag(tag_name_in)
         elif ex.msgnam == 'ALREADY_THERE':
@@ -485,6 +483,7 @@ def add_parent(node_name_in, tree):
     Returns
     -------
     """
+    node_name_in = node_name_in.replace(':','.').replace('..','::')
     parent_string = node_name_in.rsplit(sep='.', maxsplit=1)[0]
 
     try:
@@ -497,78 +496,150 @@ def add_parent(node_name_in, tree):
         tree.write()
 
 
+def put_cals_in_model_tree():
+    """
+    A one-off script to put calibration traces into the model tree to be retreived later when necessary
 
-# 	t = MDSplus.Tree('analysis3',shot,'EDIT')
-# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1','SIGNAL').addTag("N_C1")
-# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.COMMENT','TEXT')
-# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.FILT_BW','NUMERIC').addTag("C1_FILT_BW")
-# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.FILT_CENTER','NUMERIC').addTag("C1_FILT_CENTER")
-# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.SCENE_FREQ','NUMERIC').addTag("C1_FREQ")
-# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.P_ERR','SIGNAL').addTag("N_C1_P_ERR")
-# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.N_ERR','SIGNAL').addTag("N_C1_N_ERR")
-# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.REF_FREQ','NUMERIC').addTag("REF_FREQ")
-# 	t.addNode(r'\ANALYSIS3::TOP.DENSITY.FIR.REF_FILT_BW','NUMERIC').addTag("REF_FILT_BW")
+    Parameters
+    ----------
+    (none)
+    Returns
+    -------
+    """
+    tree = Tree('analysis3', 888, 'EDIT')
 
-# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1')
-# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.COMMENT')
-# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.FILT_BW')
-# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.FILT_CENTER')
-# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.SCENE_FREQ')
-# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.P_ERR')
-# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.N_AVG_C1.N_ERR')
-# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.REF_FREQ')
-# 	# t.deleteNode(r'\ANALYSIS3::TOP.DENSITY.FIR.REF_FILT_BW')
+    cal_poly_list = ['CAL_5_CH_FG_POLY_3_T_1', 'CAL_5_CH_FG_POLY_3_T_2', 'CAL_5_CH_FG_POLY_3_T_3', 'CAL_5_CH_FG_POLY_3_T_4', 'CAL_5_CH_FG_POLY_3_T_5',
+                     'CAL_5_CH_FG_POLY_3_V_1', 'CAL_5_CH_FG_POLY_3_V_2', 'CAL_5_CH_FG_POLY_3_V_3', 'CAL_5_CH_FG_POLY_3_V_4', 'CAL_5_CH_FG_POLY_3_V_5',
+                     'CAL_5_CH_FG_POLY_4_T_1', 'CAL_5_CH_FG_POLY_4_T_2', 'CAL_5_CH_FG_POLY_4_T_3', 'CAL_5_CH_FG_POLY_4_T_4', 'CAL_5_CH_FG_POLY_4_T_5',
+                     'CAL_5_CH_FG_POLY_4_V_1', 'CAL_5_CH_FG_POLY_4_V_2', 'CAL_5_CH_FG_POLY_4_V_3', 'CAL_5_CH_FG_POLY_4_V_4', 'CAL_5_CH_FG_POLY_4_V_5',
+                     'CAL_5_CH_FG_POLY_5_T_1', 'CAL_5_CH_FG_POLY_5_T_2', 'CAL_5_CH_FG_POLY_5_T_3', 'CAL_5_CH_FG_POLY_5_T_4', 'CAL_5_CH_FG_POLY_5_T_5',
+                     'CAL_5_CH_FG_POLY_5_V_1', 'CAL_5_CH_FG_POLY_5_V_2', 'CAL_5_CH_FG_POLY_5_V_3', 'CAL_5_CH_FG_POLY_5_V_4', 'CAL_5_CH_FG_POLY_5_V_5',
+                     'CAL_5_CH_HG_POLY_3_T_1', 'CAL_5_CH_HG_POLY_3_T_2', 'CAL_5_CH_HG_POLY_3_T_3', 'CAL_5_CH_HG_POLY_3_T_4', 'CAL_5_CH_HG_POLY_3_T_5',
+                     'CAL_5_CH_HG_POLY_3_V_1', 'CAL_5_CH_HG_POLY_3_V_2', 'CAL_5_CH_HG_POLY_3_V_3', 'CAL_5_CH_HG_POLY_3_V_4', 'CAL_5_CH_HG_POLY_3_V_5',
+                     'CAL_5_CH_HG_POLY_4_T_1', 'CAL_5_CH_HG_POLY_4_T_2', 'CAL_5_CH_HG_POLY_4_T_3', 'CAL_5_CH_HG_POLY_4_T_4', 'CAL_5_CH_HG_POLY_4_T_5',
+                     'CAL_5_CH_HG_POLY_4_V_1', 'CAL_5_CH_HG_POLY_4_V_2', 'CAL_5_CH_HG_POLY_4_V_3', 'CAL_5_CH_HG_POLY_4_V_4', 'CAL_5_CH_HG_POLY_4_V_5',
+                     'CAL_5_CH_HG_POLY_5_T_1', 'CAL_5_CH_HG_POLY_5_T_2', 'CAL_5_CH_HG_POLY_5_T_3', 'CAL_5_CH_HG_POLY_5_T_4', 'CAL_5_CH_HG_POLY_5_T_5',
+                     'CAL_5_CH_HG_POLY_5_V_1', 'CAL_5_CH_HG_POLY_5_V_2', 'CAL_5_CH_HG_POLY_5_V_3', 'CAL_5_CH_HG_POLY_5_V_4', 'CAL_5_CH_HG_POLY_5_V_5',
+                     'CAL_3_CH_POLY_1_T_1', 'CAL_3_CH_POLY_1_T_2', 'CAL_3_CH_POLY_1_T_3',
+                     'CAL_3_CH_POLY_1_V_1', 'CAL_3_CH_POLY_1_V_2', 'CAL_3_CH_POLY_1_V_3',
+                     'CAL_3_CH_POLY_2_T_1', 'CAL_3_CH_POLY_2_T_2', 'CAL_3_CH_POLY_2_T_3',
+                     'CAL_3_CH_POLY_2_V_1', 'CAL_3_CH_POLY_2_V_2', 'CAL_3_CH_POLY_2_V_3',
+                     'CAL_3_CH_POLY_3_T_1', 'CAL_3_CH_POLY_3_T_2', 'CAL_3_CH_POLY_3_T_3',
+                     'CAL_3_CH_POLY_3_V_1', 'CAL_3_CH_POLY_3_V_2', 'CAL_3_CH_POLY_3_V_3',
+                     'CAL_3_CH_POLY_4_T_1', 'CAL_3_CH_POLY_4_T_2', 'CAL_3_CH_POLY_4_T_3',
+                     'CAL_3_CH_POLY_4_V_1', 'CAL_3_CH_POLY_4_V_2', 'CAL_3_CH_POLY_4_V_3']
 
 
-#         hitConn.closeAllTrees()
-#         if(PDC == 0):
-#             tr = Tree("ANALYSIS3",shot,"EDIT")
-#         else:
-#             tr = Tree("ANALYSISPDC3",shot,"EDIT")
-# #            windStr = "Build_Window(0, " + np.str(len(t[ci])-1) + ", 0)"
-# #            dimStr = "Build_Dim(" + windStr + ",*:*:" + np.str(t[ci][1]-t[ci][0]) + ")"
-# #            TDIline = r"Build_Signal(Build_With_Units($,'m^-3'),*,Build_With_Units(" + dimStr + ",'s'))"
-# #            nodeName = r'\N_C1'
-#         node = tr.getNode('DENSITY.FIR.N_AVG_C1')
-#         expr = Data.compile("BUILD_SIGNAL(BUILD_WITH_UNITS($1,'m^-3'), $1, BUILD_WITH_UNITS($2,'s'))", density[ci], t[ci])
-# #            node.setUnits('m^-3')
-#         node.putData(expr)
-        
-#         node = tr.getNode('DENSITY.FIR.N_AVG_C1.P_ERR')
-#         expr = Data.compile("BUILD_SIGNAL(BUILD_WITH_UNITS($1,'m^-3'), $1, BUILD_WITH_UNITS($2,'s'))", error_pos_sum[ci], t[ci])
-#         node.putData(expr)            
+    for poly_tag in cal_poly_list:
+        info_list = poly_tag.rsplit(sep='_')
+        if info_list[1] == '3':
+            path_to_load = '/home/everson/Dropbox/HIT_TS/Calibrations/3_CH/P' + info_list[-3] + '.mat'
+        else:
+            path_to_load = '/home/everson/Dropbox/HIT_TS/Calibrations/5_CH_' + info_list[3] + '/P' + info_list[-3] + '.mat'
 
-#         node = tr.getNode('DENSITY.FIR.N_AVG_C1.N_ERR')
-#         expr = Data.compile("BUILD_SIGNAL(BUILD_WITH_UNITS($1,'m^-3'), $1, BUILD_WITH_UNITS($2,'s'))", error_neg_sum[ci], t[ci])
-#         node.putData(expr)
-        
-#         node = tr.getNode('DENSITY.FIR.N_AVG_C1.FILT_BW')
-#         node.setUnits('Hz')
-#         node.putData(filter_width[1])
-        
-#         node = tr.getNode('DENSITY.FIR.N_AVG_C1.FILT_CENTER')
-#         node.setUnits('Hz')
-#         node.putData(filter_center[1])
-        
-#         node = tr.getNode('DENSITY.FIR.N_AVG_C1.SCENE_FREQ')
-#         node.setUnits('Hz')
-#         node.putData(freq[1])
-        
-#         node = tr.getNode('DENSITY.FIR.REF_FREQ')
-#         node.setUnits('Hz')
-#         node.putData(freq[0])            
-        
-#         node = tr.getNode('DENSITY.FIR.REF_FILT_BW')
-#         node.setUnits('Hz')
-#         node.putData(filter_width[0])
+        loaded_mat = loadmat(path_to_load, struct_as_record=False)
+        poly_string = 'p' + info_list[-3]
+        transmission = loaded_mat[poly_string][0][0].t
+        wavelength = loaded_mat[poly_string][0][0].l
+        variance = loaded_mat[poly_string][0][0].v
+        channel_index = int(info_list[-1]) - 1
+
+        if info_list[-2] == 'V':
+            tree_write_safe(variance[channel_index], poly_tag, dim=wavelength[0], tree=tree)
+        else:
+            tree_write_safe(transmission[channel_index], poly_tag, dim=wavelength[0], tree=tree)
+
+    tree.close()
+
+
+
 
 # thomson analysis tree variable definitions:
-thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CHAN_POLY_2_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2.TRANS_1', 'SIGNAL', 'arb', 'm'],
-                                         ['CAL_3_CHAN_POLY_2_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2.TRANS_2', 'SIGNAL', 'arb', 'm'],
-                                         ['CAL_3_CHAN_POLY_2_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2.TRANS_3', 'SIGNAL', 'arb', 'm'],
-                                         ['CAL_3_CHAN_POLY_2_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2.VARIANCE_1', 'SIGNAL', '', 'm'],
-                                         ['CAL_3_CHAN_POLY_2_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2.VARIANCE_2', 'SIGNAL', '', 'm'],
-                                         ['CAL_3_CHAN_POLY_2_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2.VARIANCE_3', 'SIGNAL', '', 'm'],
+thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_1:TRANS_1', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CH_POLY_1_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_1:TRANS_2', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CH_POLY_1_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_1:TRANS_3', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CH_POLY_1_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_1:VARIANCE_1', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CH_POLY_1_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_1:VARIANCE_2', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CH_POLY_1_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_1:VARIANCE_3', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CH_POLY_2_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2:TRANS_1', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CH_POLY_2_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2:TRANS_2', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CH_POLY_2_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2:TRANS_3', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CH_POLY_2_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2:VARIANCE_1', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CH_POLY_2_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2:VARIANCE_2', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CH_POLY_2_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2:VARIANCE_3', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CH_POLY_3_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_3:TRANS_1', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CH_POLY_3_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_3:TRANS_2', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CH_POLY_3_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_3:TRANS_3', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CH_POLY_3_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_3:VARIANCE_1', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CH_POLY_3_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_3:VARIANCE_2', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CH_POLY_3_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_3:VARIANCE_3', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CH_POLY_4_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_4:TRANS_1', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CH_POLY_4_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_4:TRANS_2', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CH_POLY_4_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_4:TRANS_3', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_3_CH_POLY_4_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_4:VARIANCE_1', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CH_POLY_4_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_4:VARIANCE_2', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CH_POLY_4_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_4:VARIANCE_3', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_3_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:TRANS_1', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_3_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:TRANS_2', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_3_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:TRANS_3', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_3_T_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:TRANS_4', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_3_T_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:TRANS_5', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_3_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:VARIANCE_1', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_3_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:VARIANCE_2', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_3_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:VARIANCE_3', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_3_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:VARIANCE_4', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_3_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_4_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:TRANS_1', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_4_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:TRANS_2', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_4_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:TRANS_3', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_4_T_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:TRANS_4', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_4_T_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:TRANS_5', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_4_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:VARIANCE_1', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_4_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:VARIANCE_2', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_4_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:VARIANCE_3', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_4_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:VARIANCE_4', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_4_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_5_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:TRANS_1', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_5_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:TRANS_2', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_5_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:TRANS_3', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_5_T_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:TRANS_4', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_5_T_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:TRANS_5', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_FG_POLY_5_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:VARIANCE_1', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_5_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:VARIANCE_2', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_5_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:VARIANCE_3', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_5_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:VARIANCE_4', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_5_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_3_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:TRANS_1', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_3_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:TRANS_2', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_3_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:TRANS_3', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_3_T_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:TRANS_4', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_3_T_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:TRANS_5', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_3_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:VARIANCE_1', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_3_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:VARIANCE_2', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_3_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:VARIANCE_3', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_3_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:VARIANCE_4', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_3_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_4_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:TRANS_1', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_4_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:TRANS_2', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_4_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:TRANS_3', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_4_T_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:TRANS_4', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_4_T_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:TRANS_5', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_4_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:VARIANCE_1', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_4_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:VARIANCE_2', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_4_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:VARIANCE_3', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_4_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:VARIANCE_4', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_4_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_5_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:TRANS_1', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_5_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:TRANS_2', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_5_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:TRANS_3', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_5_T_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:TRANS_4', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_5_T_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:TRANS_5', 'SIGNAL', 'arb', 'm'],
+                                         ['CAL_5_CH_HG_POLY_5_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:VARIANCE_1', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_5_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:VARIANCE_2', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_5_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:VARIANCE_3', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_5_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:VARIANCE_4', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_5_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['LASER_E_FAC', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.LASER_E_FAC', 'NUMERIC', '', ''],
                                          ['ENERGY', 'ANALYSIS3::TOP.THOMSON.LASER_ENERGY', 'NUMERIC', 'J', '']],
                                          columns=['Tag', 'Path', 'Usage', 'Units', 'dim_Units'])
 
