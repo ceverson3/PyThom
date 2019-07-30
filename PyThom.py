@@ -9,6 +9,7 @@ Created on Tue Jul  9 16:40:22 2019
 # imports
 import matplotlib.pyplot as plt   # plotting
 import datetime
+import re                         # for string with wildcard character matching
 import numpy as np                # math
 import scipy.signal as sig        # signal math
 from scipy.io import loadmat      # for loading matlab files
@@ -23,6 +24,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 
 PLOTS_ON = 1
 photodiode_baseline_record_fraction = 0.15 # the fraction of the ruby photodiode record to take as the baseline
+num_vacuum_shots = 4
 style = 'Freq'  # 'Bayes' for Bayesian analysis or 'Freq' for frequentist/ratio evaluation method
 sns.set()   # Set the plotting theme
 
@@ -49,8 +51,11 @@ def analyze_shot(shot_number):
     analysis_tree = Tree('analysis3', shot_number, 'EDIT')
     model_tree = Tree('analysis3', -1)
 
-    # Ensure calibration data are in the tree
+    # Ensure calibration data are in the tree,
+    # both the spectral calibrations
     put_cals_in_tree(analysis_tree)
+
+    # and the laser energy calibration
     try:
         laser_energy_calibration_factor = analysis_tree.getNode('\\LASER_E_FAC')
     except Exception as ex:
@@ -90,18 +95,67 @@ def analyze_shot(shot_number):
         else:
             print(ex)
 
+    # Add the determined laser energy to the log book
+    log_book.loc[log_book.Shot == shot_number, 'Energy'] = laser_energy
+
+    # Get the vacuum shots to use for stray light background subtraction
+    vacuum_shot_list = get_vacuum_shot_list(shot_number, log_book, num_vacuum_shots)
+    # TODO write the vacuum shots to the logbook
+
+    # Get a list of the active polychromators by name
+    regex = re.compile('POLY_._.')
+    poly_list = [string for string in log_book.columns if re.match(regex, string) and log_book.loc[log_book.Shot == shot_number, string].array[0] != 0]
+
+    geometry = get_spot_geometry(log_book.loc[log_book.Shot == shot_number, 'Mount_Positions'].array[0], log_book.loc[log_book.Shot == shot_number, 'Jack_Height'].array[0])
+    for poly_id in poly_list:
+
+        # Put the geometry data for each polychromator in the analysis tree if it isn't already:
+        for tag_name in geometry.columns.array[1:]:
+            data = geometry.loc[geometry.polychromator == int(poly_id.rsplit(sep='_')[-2]), tag_name].array[0]
+            tree_write_safe(data, poly_id[:-2] + '_' + tag_name, tree=analysis_tree)
+
+        # Put the raw polychromator data in the analysis tree if it isn't already:
+        try:
+            raw_poly_channel_sig = analysis_tree.getNode('\\' + poly_id + '_RAW').getData().data()
+        except Exception as ex:
+            raw_poly_channel_sig = data_tree.getNode('\\TS_POLY' + poly_id[-3:]).getData().data()
+            raw_poly_channel_t = data_tree.getNode('\\TS_POLY' + poly_id[-3:]).dim_of().data()
+            # print(raw_poly_channel_t[np.where(raw_poly_channel_sig == np.max(raw_poly_channel_sig))[0]][0])
+            tree_write_safe(raw_poly_channel_sig, poly_id + '_RAW', dim=raw_poly_channel_t, tree=analysis_tree)
+        raw_poly_channel_t = analysis_tree.getNode('\\' + poly_id + '_RAW').dim_of().data()
+
+        # Average the closest vacuum shots with their energies scaled, checking first and putting the vacuum shot
+        # in the tree if necessary
+        try:
+            poly_channel_vacuum_avg = analysis_tree.getNode('\\' + poly_id + '_VAC').getData().data()
+        except Exception as ex:
+            pass
+            # average_vacuum = average_shots(vacuum_shot_list, log_book)
+
+
+
+
+
+
+
+
+
+
     # calculate and store the electron energy distribution function,
     # including temperature, density, and electron drift velocity
 
+    # Get the vacuum shot to use for stray light background subtraction, using an average of every vacuum shot from the
+    # same day as the plasma shot, or the nearest day with a vacuum shot:
 
-    # record_filename = 'TS_analysis_logbook' + datetime.date.today().isoformat() + '.csv'
-    # latest_filename = 'TS_analysis_logbook.csv'
 
-    # max_i_tor_dataframe = pd.DataFrame(data=i_tor_max, columns=['i_tor_max'])
-    # generated_ts_log = pd.concat([generated_ts_log, max_i_tor_dataframe], axis=1)
 
-    # log_book.to_csv(record_filename, index=False)
-    # log_book.to_csv(latest_filename, index=False)
+
+    # Write the new logbook dataframe to the master logbook file
+    record_filename = 'TS_analysis_logbook' + datetime.date.today().isoformat() + '.csv'
+    latest_filename = 'TS_analysis_logbook.csv'
+
+    log_book.to_csv(record_filename, index=False)
+    log_book.to_csv(latest_filename, index=False)
 
 
 def get_ts_logbook(force_update=None):
@@ -158,11 +212,13 @@ def get_ts_logbook(force_update=None):
     print('Updating logbook...')
 
     # clean up and start the dataframe to return
-    generated_ts_log = raw_ts_log[['Shot', 'TS_TRIG (ms)', 'Energy', 'Plasma Species', 'Notes']]
+    generated_ts_log = raw_ts_log[['Shot', 'TS_TRIG (ms)', 'Energy', 'Plasma Species', 'Notes', 'Fiber Mount Positions (in order polys. 12345)', 'Lab jack height (in.)']]
     generated_ts_log = generated_ts_log.rename(index=str, columns={'Plasma Species': 'Fuel'})
     generated_ts_log = generated_ts_log.rename(index=str, columns={'TS_TRIG (ms)': 'TS_TRIG'})
+    generated_ts_log = generated_ts_log.rename(index=str, columns={'Fiber Mount Positions (in order polys. 12345)': 'Mount_Positions'})
+    generated_ts_log = generated_ts_log.rename(index=str, columns={'Lab jack height (in.)': 'Jack_Height'})
     generated_ts_log['Shot'] = generated_ts_log.Shot.astype('int64')
-    generated_ts_log['Fuel'].replace({'-': 'V'}, inplace=True)
+    # generated_ts_log['Fuel'].replace({'-': 'V'}, inplace=True)
 
     generated_ts_log.reset_index(inplace=True, drop=True)
 
@@ -200,7 +256,7 @@ def get_ts_logbook(force_update=None):
         fiber_mount_string = raw_ts_log['Fiber Mount Positions (in order polys. 12345)'].iloc[ind]
         jack_height = raw_ts_log['Lab jack height (in.)'].iloc[ind]
         geometry_oneshot_dataframe = get_spot_geometry(fiber_mount_string, jack_height)
-        r_oneshot_dataframe = pd.DataFrame(data=[geometry_oneshot_dataframe['r'].array],
+        r_oneshot_dataframe = pd.DataFrame(data=[geometry_oneshot_dataframe['R'].array],
                                            columns=['radius_poly_' + str(p) for p in geometry_oneshot_dataframe['polychromator']])
         geometry_parse_dataframe = pd.concat([geometry_parse_dataframe, r_oneshot_dataframe.astype(np.float64)], ignore_index=True, sort=False)
 
@@ -292,9 +348,9 @@ def get_spot_geometry(fiber_mount_string_in, jack_height_in):
 
     spot_high_edge = pd.concat([spot_high_edge, all_jack_heights], axis=1)
 
-    geom_dataframe = pd.DataFrame(columns=['polychromator', 'length', 'r', 'phi', 'z',
-                                           'r_pos', 'r_neg', 'z_pos', 'z_neg',
-                                           'view_angle', 'f_number', 'solid_angle'])
+    geom_dataframe = pd.DataFrame(columns=['polychromator', 'LENGTH', 'R', 'PHI', 'Z',
+                                           'R_POS', 'R_NEG', 'Z_POS', 'Z_NEG',
+                                           'THETA', 'SOLID_ANGLE'])
 
     polychromator = 0
     for fiber_mount_character in fiber_mount_list:
@@ -302,8 +358,8 @@ def get_spot_geometry(fiber_mount_string_in, jack_height_in):
         if fiber_mount_character == 'X':
             continue
 
-        spot_bottom = spot_low_edge[fiber_mount_character][spot_low_edge.jack_height == jack_height_in].to_numpy() - origin_measurements
-        spot_top = spot_high_edge[fiber_mount_character][spot_high_edge.jack_height == jack_height_in].to_numpy() - origin_measurements
+        spot_bottom = spot_low_edge[fiber_mount_character][spot_low_edge.jack_height == jack_height_in].array[0] - origin_measurements
+        spot_top = spot_high_edge[fiber_mount_character][spot_high_edge.jack_height == jack_height_in].array[0] - origin_measurements
 
         length = spot_top - spot_bottom
         raw_center = spot_bottom + length/2
@@ -336,10 +392,10 @@ def get_spot_geometry(fiber_mount_string_in, jack_height_in):
 
         geom_dataframe = pd.concat([geom_dataframe, pd.DataFrame(data=[[polychromator, length/100, r/100, phi, z/100,
                                                                        r_pos/100, r_neg/100, z_pos/100, z_neg/100,
-                                                                       theta, f_number, solid_angle]],
-                                                                 columns=['polychromator', 'length', 'r', 'phi', 'z',
-                                                                          'r_pos', 'r_neg', 'z_pos', 'z_neg',
-                                                                          'theta', 'f_number', 'solid_angle'])],
+                                                                       theta, solid_angle]],
+                                                                 columns=['polychromator', 'LENGTH', 'R', 'PHI', 'Z',
+                                                                          'R_POS', 'R_NEG', 'Z_POS', 'Z_NEG',
+                                                                          'THETA', 'SOLID_ANGLE'])],
                                                                  ignore_index=True, sort=False)
 
         # TODO: add TS scattering parameter to the returned values
@@ -628,9 +684,58 @@ def put_cals_in_tree(tree=None):
 
             tree_write_safe(data_to_write, poly_tag, dim=data_to_write_t, tree=tree)
 
-
 def show_tree_node(tag_name, tree):
     pass
+
+
+def get_vacuum_shot_list(shot_number, log_book, number_vacuum_shots):
+    """
+    Finds nearest vacuum shots for a given Thomson shot.
+
+    Parameters
+    ----------
+    shot_num
+    log_book
+
+    Returns
+    -------
+    vac_list: a list of vacuum shots 
+    """
+    ts_today = np.int(str(shot_number)[0:6])
+    ts_days = np.unique(np.array([np.int(shots[0:6]) for shots in log_book['Shot'].astype(str)]))
+    earlier_days = ts_days[np.where(ts_days < ts_today)]
+    later_days = ts_days[np.where(ts_days > ts_today)]
+    other_days = np.empty((earlier_days.size + later_days.size,), dtype=earlier_days.dtype)
+
+    other_days = interleave(earlier_days[::-1], later_days)
+    days_to_check = np.insert(other_days, 0, ts_today)
+
+    vac_list = [str(shot) for shot in log_book['Shot'] if str(shot)[:6] == str(ts_today) and log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'V']
+    ctr = 1
+    while len(vac_list) < number_vacuum_shots and ctr < len(days_to_check):
+        vac_list = np.insert(vac_list, 1, [str(shot) for shot in log_book['Shot'] if str(shot)[:6] == str(days_to_check[ctr])
+                                                                                    and log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'V'
+                                                                                    and log_book.loc[log_book.Shot == shot, 'Mount_Positions'].array[0] ==
+                                                                                        log_book.loc[log_book.Shot == shot_number, 'Mount_Positions'].array[0]
+                                                                                    and log_book.loc[log_book.Shot == shot, 'Jack_Height'].array[0] ==
+                                                                                        log_book.loc[log_book.Shot == shot_number, 'Jack_Height'].array[0]])
+        ctr = ctr + 1
+    return vac_list.astype(int)[0:number_vacuum_shots]
+
+
+def interleave(list1, list2):
+    newlist = []
+    a1 = len(list1)
+    a2 = len(list2)
+
+    for i in range(max(a1, a2)):
+        if i < a1:
+            newlist.append(list1[i])
+        if i < a2:
+            newlist.append(list2[i])
+
+    return newlist
+
 
 # thomson analysis tree variable definitions:
 thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_1:TRANS_1', 'SIGNAL', 'arb', 'm'],
@@ -717,69 +822,109 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['CAL_5_CH_HG_POLY_5_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:VARIANCE_3', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_HG_POLY_5_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:VARIANCE_4', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_HG_POLY_5_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['POLY_1_LENGTH', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:LENGTH', 'NUMERIC', 'm', ''],
                                          ['POLY_1_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:R', 'NUMERIC', 'm', ''],
                                          ['POLY_1_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:Z', 'NUMERIC', 'm', ''],
                                          ['POLY_1_PHI', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:PHI', 'NUMERIC', 'm', ''],
                                          ['POLY_1_R_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:R_POS', 'NUMERIC', 'm', ''],
                                          ['POLY_1_R_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:R_NEG', 'NUMERIC', 'm', ''],
+                                         ['POLY_1_Z_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:Z_POS', 'NUMERIC', 'm', ''],
+                                         ['POLY_1_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_1_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
-                                         ['POLY_1_R_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_1_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_2_LENGTH', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:LENGTH', 'NUMERIC', 'm', ''],
                                          ['POLY_2_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:R', 'NUMERIC', 'm', ''],
                                          ['POLY_2_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:Z', 'NUMERIC', 'm', ''],
                                          ['POLY_2_PHI', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:PHI', 'NUMERIC', 'm', ''],
                                          ['POLY_2_R_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:R_POS', 'NUMERIC', 'm', ''],
                                          ['POLY_2_R_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:R_NEG', 'NUMERIC', 'm', ''],
+                                         ['POLY_2_Z_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:Z_POS', 'NUMERIC', 'm', ''],
+                                         ['POLY_2_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_2_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
-                                         ['POLY_2_R_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_2_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_3_LENGTH', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:LENGTH', 'NUMERIC', 'm', ''],
                                          ['POLY_3_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:R', 'NUMERIC', 'm', ''],
                                          ['POLY_3_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:Z', 'NUMERIC', 'm', ''],
                                          ['POLY_3_PHI', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:PHI', 'NUMERIC', 'm', ''],
                                          ['POLY_3_R_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:R_POS', 'NUMERIC', 'm', ''],
                                          ['POLY_3_R_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:R_NEG', 'NUMERIC', 'm', ''],
+                                         ['POLY_3_Z_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:Z_POS', 'NUMERIC', 'm', ''],
+                                         ['POLY_3_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_3_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
-                                         ['POLY_3_R_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_3_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_4_LENGTH', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:LENGTH', 'NUMERIC', 'm', ''],
                                          ['POLY_4_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:R', 'NUMERIC', 'm', ''],
                                          ['POLY_4_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:Z', 'NUMERIC', 'm', ''],
                                          ['POLY_4_PHI', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:PHI', 'NUMERIC', 'm', ''],
                                          ['POLY_4_R_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:R_POS', 'NUMERIC', 'm', ''],
                                          ['POLY_4_R_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:R_NEG', 'NUMERIC', 'm', ''],
+                                         ['POLY_4_Z_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:Z_POS', 'NUMERIC', 'm', ''],
+                                         ['POLY_4_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_4_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
-                                         ['POLY_4_R_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_4_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_5_LENGTH', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:LENGTH', 'NUMERIC', 'm', ''],
                                          ['POLY_5_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:R', 'NUMERIC', 'm', ''],
                                          ['POLY_5_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:Z', 'NUMERIC', 'm', ''],
                                          ['POLY_5_PHI', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:PHI', 'NUMERIC', 'm', ''],
                                          ['POLY_5_R_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:R_POS', 'NUMERIC', 'm', ''],
                                          ['POLY_5_R_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:R_NEG', 'NUMERIC', 'm', ''],
+                                         ['POLY_5_Z_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:Z_POS', 'NUMERIC', 'm', ''],
+                                         ['POLY_5_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_5_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
-                                         ['POLY_5_R_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
-                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_1_RAW_2', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_2', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_1_RAW_3', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_3', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_1_RAW_4', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_4', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_1_RAW_5', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_5', 'SIGNAL', 'V', 's'],
-                                         ['POLY_2_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_2_RAW_2', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.RAW:CHANNEL_2', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_2_RAW_3', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.RAW:CHANNEL_3', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_2_RAW_4', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.RAW:CHANNEL_4', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_2_RAW_5', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.RAW:CHANNEL_5', 'SIGNAL', 'V', 's'],
-                                         ['POLY_3_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_3_RAW_2', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.RAW:CHANNEL_2', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_3_RAW_3', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.RAW:CHANNEL_3', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_3_RAW_4', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.RAW:CHANNEL_4', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_3_RAW_5', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.RAW:CHANNEL_5', 'SIGNAL', 'V', 's'],
-                                         ['POLY_4_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_4_RAW_2', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.RAW:CHANNEL_2', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_4_RAW_3', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.RAW:CHANNEL_3', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_4_RAW_4', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.RAW:CHANNEL_4', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_4_RAW_5', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.RAW:CHANNEL_5', 'SIGNAL', 'V', 's'],
-                                         ['POLY_5_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_5_RAW_2', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.RAW:CHANNEL_2', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_5_RAW_3', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.RAW:CHANNEL_3', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_5_RAW_4', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.RAW:CHANNEL_4', 'SIGNAL', 'V', 's'],                                         ['POLY_1_RAW_1', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
-                                         ['POLY_5_RAW_5', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.RAW:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_1_1_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_2_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_3_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_4_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_1_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_2_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.RAW:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_3_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.RAW:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_4_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.RAW:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_5_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.RAW:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_1_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_2_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.RAW:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_3_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.RAW:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_4_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.RAW:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_5_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.RAW:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_1_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_2_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.RAW:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_3_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.RAW:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_4_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.RAW:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_5_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.RAW:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_1_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_2_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.RAW:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_3_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.RAW:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_4_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.RAW:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_5_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.RAW:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_1_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAC:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_2_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAC:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_3_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAC:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_4_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAC:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_5_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAC:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_1_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAC:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_2_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAC:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_3_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAC:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_4_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAC:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_5_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAC:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_1_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAC:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_2_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAC:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_3_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAC:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_4_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAC:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_5_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAC:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_1_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAC:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_2_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAC:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_3_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAC:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_4_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAC:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_5_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAC:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_1_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAC:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_2_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAC:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_3_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAC:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_4_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAC:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_5_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAC:CHANNEL_5', 'SIGNAL', 'V', 's'],
                                          ['LASER_E_FAC', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.LASER_E_FAC', 'NUMERIC', '', ''],
                                          ['ENERGY', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY', 'NUMERIC', 'J', ''],
                                          ['ENERGY_PD', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY_PD', 'SIGNAL', 'V', 's'],
+                                         ['VACUUM', 'ANALYSIS3::TOP.THOMSON.LASER:VACUUM', 'SIGNAL', 'V', 's'],
                                          ['TRIG_TIME', 'ANALYSIS3::TOP.THOMSON.LASER:TRIG_TIME', 'NUMERIC', 's', ''],
                                          ['FIRE_TIME', 'ANALYSIS3::TOP.THOMSON.LASER:FIRE_TIME', 'NUMERIC', 's', '']
                                          ],
