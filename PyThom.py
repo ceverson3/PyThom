@@ -11,7 +11,6 @@ import matplotlib.pyplot as plt   # plotting
 import datetime
 import re                         # for string with wildcard character matching
 import numpy as np                # math
-import scipy.signal as sig        # signal math
 from scipy.io import loadmat      # for loading matlab files
 import pandas as pd               # large 2D dataframe operations
 import seaborn as sns             # colors!
@@ -57,21 +56,21 @@ def analyze_shot(shot_number):
 
     # and the laser energy calibration
     try:
-        laser_energy_calibration_factor = analysis_tree.getNode('\\LASER_E_FAC')
+        laser_energy_calibration_factor = get_data('LASER_E_FAC', analysis_tree)
     except Exception as ex:
         if ex.msgnam == 'NNF' or ex.msgnam == 'NODATA':
-            laser_energy_calibration_factor = model_tree.getNode('\\LASER_E_FAC')
+            laser_energy_calibration_factor = get_data('LASER_E_FAC', model_tree)
             tree_write_safe(laser_energy_calibration_factor, 'LASER_E_FAC', tree=analysis_tree)
         else:
             print(ex)
 
-    # Find the shot timing using the \TS_OSC_TRIG data tree variable
+    # Find the laser timing in the context of the full shot using the \TS_OSC_TRIG data tree variable
     try:
-        fire_time = analysis_tree.getNode('\\FIRE_TIME').getData().data()
+        fire_time = get_data('FIRE_TIME', analysis_tree)
     except Exception as ex:
         if ex.msgnam == 'NNF' or ex.msgnam == 'NODATA':
-            shot_timing_sig = data_tree.getNode('\\TS_OSC_TRIG').getData().data()
-            shot_timing_t = data_tree.getNode('\\TS_OSC_TRIG').dim_of().data()
+            shot_timing_sig = get_data('TS_OSC_TRIG', data_tree)
+            shot_timing_t = get_dim('TS_OSC_TRIG', data_tree)
             fire_time = shot_timing_t[np.where(shot_timing_sig == np.max(shot_timing_sig))[0]][0]
             tree_write_safe(fire_time, 'FIRE_TIME', tree=analysis_tree)
         else:
@@ -82,11 +81,11 @@ def analyze_shot(shot_number):
 
     # Calculate and store the laser energy
     try:
-        laser_energy = analysis_tree.getNode('\\ENERGY').getData().data()
+        laser_energy = get_data('ENERGY', analysis_tree)
     except Exception as ex:
         if ex.msgnam == 'NNF' or ex.msgnam == 'NODATA':
-            energy_photodiode_sig = data_tree.getNode('\\TS_RUBY').getData().data()
-            energy_photodiode_t = data_tree.getNode('\\TS_RUBY').dim_of().data()
+            energy_photodiode_sig = get_data('TS_RUBY', data_tree)
+            energy_photodiode_t = get_dim('TS_RUBY', data_tree)
             photodiode_baseline = np.mean(energy_photodiode_sig[0:np.int(np.around(np.size(energy_photodiode_sig, 0)*photodiode_baseline_record_fraction))])
             energy_photodiode_sig = energy_photodiode_sig - photodiode_baseline
             laser_energy = laser_energy_calibration_factor*np.trapz(energy_photodiode_sig, energy_photodiode_t)
@@ -95,8 +94,15 @@ def analyze_shot(shot_number):
         else:
             print(ex)
 
+    energy_photodiode_sig = get_data('ENERGY_PD', analysis_tree)
+    energy_photodiode_t = get_dim('ENERGY_PD', analysis_tree)
+
     # Add the determined laser energy to the log book
     log_book.loc[log_book.Shot == shot_number, 'Energy'] = laser_energy
+
+    # Add the time of peak laser power to the log book
+    peak_laser_time = energy_photodiode_t[np.where(energy_photodiode_sig == np.max(energy_photodiode_sig))[0][0]]
+    log_book.loc[log_book.Shot == shot_number, 'Pulse_Time'] = peak_laser_time
 
     # Get the vacuum shots to use for stray light background subtraction
     vacuum_shot_list = get_vacuum_shot_list(shot_number, log_book, num_vacuum_shots)
@@ -116,21 +122,19 @@ def analyze_shot(shot_number):
 
         # Put the raw polychromator data in the analysis tree if it isn't already:
         try:
-            raw_poly_channel_sig = analysis_tree.getNode('\\' + poly_id + '_RAW').getData().data()
+            raw_poly_channel_sig = get_data( poly_id + '_RAW', analysis_tree)
         except Exception as ex:
-            raw_poly_channel_sig = data_tree.getNode('\\TS_POLY' + poly_id[-3:]).getData().data()
-            raw_poly_channel_t = data_tree.getNode('\\TS_POLY' + poly_id[-3:]).dim_of().data()
-            # print(raw_poly_channel_t[np.where(raw_poly_channel_sig == np.max(raw_poly_channel_sig))[0]][0])
+            raw_poly_channel_sig = get_data('TS_POLY' + poly_id[-3:], data_tree)
+            raw_poly_channel_t = get_dim('TS_POLY' + poly_id[-3:], data_tree)
             tree_write_safe(raw_poly_channel_sig, poly_id + '_RAW', dim=raw_poly_channel_t, tree=analysis_tree)
-        raw_poly_channel_t = analysis_tree.getNode('\\' + poly_id + '_RAW').dim_of().data()
+        raw_poly_channel_t = get_dim(poly_id + '_RAW', analysis_tree)
 
         # Average the closest vacuum shots with their energies scaled, checking first and putting the vacuum shot
         # in the tree if necessary
         try:
-            poly_channel_vacuum_avg = analysis_tree.getNode('\\' + poly_id + '_VAC').getData().data()
+            poly_channel_vacuum_avg = get_data(poly_id + '_VAC', analysis_tree)
         except Exception as ex:
             pass
-            # average_vacuum = average_shots(vacuum_shot_list, log_book)
 
 
 
@@ -684,8 +688,19 @@ def put_cals_in_tree(tree=None):
 
             tree_write_safe(data_to_write, poly_tag, dim=data_to_write_t, tree=tree)
 
+
 def show_tree_node(tag_name, tree):
     pass
+
+
+def get_data(tag_name, tree):
+    data = tree.getNode('\\' + tag_name).getData().data()
+    return data
+
+
+def get_dim(tag_name, tree):
+    t = tree.getNode('\\' + tag_name).dim_of().data()
+    return t
 
 
 def get_vacuum_shot_list(shot_number, log_book, number_vacuum_shots):
