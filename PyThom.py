@@ -9,6 +9,7 @@ Created on Tue Jul  9 16:40:22 2019
 # imports
 import matplotlib.pyplot as plt   # plotting
 import datetime
+import scipy.signal as signal     # for signal operations like detrending, etc.
 import re                         # for string with wildcard character matching
 import numpy as np                # math
 from scipy.io import loadmat      # for loading matlab files
@@ -22,6 +23,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 
 
 PLOTS_ON = 1
+FORCE_NEW_NODES = 1
 photodiode_baseline_record_fraction = 0.15 # the fraction of the ruby photodiode record to take as the baseline
 num_vacuum_shots = 4
 style = 'Freq'  # 'Bayes' for Bayesian analysis or 'Freq' for frequentist/ratio evaluation method
@@ -38,8 +40,97 @@ def analyze_shot(shot_number):
     Returns
     -------
     """
+    # Load the analysis tree and the log book
+    analysis_tree = Tree('analysis3', shot_number, 'EDIT')
+    log_book = get_ts_logbook(verbose=1)
+
+    # Get the vacuum shots to use for stray light background subtraction
+    vacuum_shot_list = get_vacuum_shot_list(shot_number, log_book, num_vacuum_shots)
+    # TODO write the vacuum shots to the logbook
+
+    if FORCE_NEW_NODES == 1:
+        analysis_tree.deleteNode('\\ANALYSIS3::TOP.THOMSON')
+        analysis_tree.write()
+        for shot in vacuum_shot_list:
+            vac_tree = Tree('analysis3', shot, 'EDIT')
+            vac_tree.deleteNode('\\ANALYSIS3::TOP.THOMSON')
+            vac_tree.write()
+            vac_tree.close()
+
+    # Make sure the right data is in the analysis tree
+    build_shot(shot_number)
+
+    # The logbook is the dataframe-style ledger for human-readable summary TS data
+    # parameters used in the analysis code are found and written here
+    log_book = get_ts_logbook(verbose=1)
+    analysis_tree = Tree('analysis3', shot_number, 'EDIT')
+
+    # Get the photodiode energy trace
+    energy_photodiode_sig = get_data('ENERGY_PD', analysis_tree)
+    energy_photodiode_t = get_dim('ENERGY_PD', analysis_tree)
+
+    # Get a list of the active polychromators by name
+    regex = re.compile('POLY_._.')
+    poly_list = [string for string in log_book.columns if re.match(regex, string) and log_book.loc[log_book.Shot == shot_number, string].array[0] != 0]
+
+    # TODO possibly remove next line
+    # Get the geometric parameters for the measurements of shot_number
+    # geometry = get_spot_geometry(log_book.loc[log_book.Shot == shot_number, 'Mount_Positions'].array[0], log_book.loc[log_book.Shot == shot_number, 'Jack_Height'].array[0])
+
+    # Analyze all active polychromator channels
+    for poly_id in poly_list:
+
+        # Get the raw polychromator data:
+        raw_poly_channel_sig = get_data(poly_id + '_RAW', analysis_tree)
+        raw_poly_channel_t = get_dim(poly_id + '_RAW', analysis_tree)
+
+        # Detrend and otherwise clean up the raw signals
+        clean_poly_channel_sig = signal.savgol_filter(signal.detrend(raw_poly_channel_sig), 101, 3)
+        clean_poly_channel_t = raw_poly_channel_t
+        tree_write_safe(clean_poly_channel_sig, poly_id + '_SIG', dim=clean_poly_channel_t, tree=analysis_tree)
+
+        # Average the closest previous/subsequent comparable vacuum shots with their energies scaled, checking first
+        # and putting the vacuum shot in the tree if necessary
+        poly_channel_vacuum_avg = get_data(poly_id + '_VAC', analysis_tree)
+
+
+
+    # calculate and store the electron energy distribution function,
+    # including temperature, density, and electron drift velocity
+
+
+    # Get the vacuum shot to use for stray light background subtraction, using an average of every vacuum shot from the
+    # same day as the plasma shot, or the nearest day with a vacuum shot:
+
+
+
+
+    # Write the new logbook dataframe to the master logbook file
+    record_filename = 'TS_analysis_logbook' + datetime.date.today().isoformat() + '.csv'
+    latest_filename = 'TS_analysis_logbook.csv'
+
+    log_book.to_csv(record_filename, index=False)
+    log_book.to_csv(latest_filename, index=False)
+
+
+
+def build_shot(shot_number):
+    """
+    Build the tree and logbook up with relevant Thomson data/parameters for shot_number
+    ----------
+    Does analysis in a frugal way that avoids duplicate math by writing
+    any incremental results to the analysis3 tree
+
+    Returns
+    -------
+    """
+    print('Building shot ' + str(shot_number))
+
+
     # TODO remove next line
     # shot_number = 190619016
+    record_filename = 'TS_analysis_logbook' + datetime.date.today().isoformat() + '.csv'
+    latest_filename = 'TS_analysis_logbook.csv'
 
     # The logbook is the dataframe-style ledger for human-readable summary TS data
     # parameters used in the analysis code are found and written here
@@ -94,11 +185,12 @@ def analyze_shot(shot_number):
         else:
             print(ex)
 
-    energy_photodiode_sig = get_data('ENERGY_PD', analysis_tree)
-    energy_photodiode_t = get_dim('ENERGY_PD', analysis_tree)
-
     # Add the determined laser energy to the log book
     log_book.loc[log_book.Shot == shot_number, 'Energy'] = laser_energy
+
+    # Get the photodiode energy trace
+    energy_photodiode_sig = get_data('ENERGY_PD', analysis_tree)
+    energy_photodiode_t = get_dim('ENERGY_PD', analysis_tree)
 
     # Add the time of peak laser power to the log book
     peak_laser_time = energy_photodiode_t[np.where(energy_photodiode_sig == np.max(energy_photodiode_sig))[0][0]]
@@ -112,8 +204,16 @@ def analyze_shot(shot_number):
     regex = re.compile('POLY_._.')
     poly_list = [string for string in log_book.columns if re.match(regex, string) and log_book.loc[log_book.Shot == shot_number, string].array[0] != 0]
 
+    # Get the geometric parameters for the measurements of shot_number
     geometry = get_spot_geometry(log_book.loc[log_book.Shot == shot_number, 'Mount_Positions'].array[0], log_book.loc[log_book.Shot == shot_number, 'Jack_Height'].array[0])
+
+    # Write the new logbook dataframe to the master logbook file
+    log_book.to_csv(record_filename, index=False)
+    log_book.to_csv(latest_filename, index=False)
+
+    # Analyze all active polychromator channels
     for poly_id in poly_list:
+        # print(str(shot_number) + ' ' + str(poly_id))
 
         # Put the geometry data for each polychromator in the analysis tree if it isn't already:
         for tag_name in geometry.columns.array[1:]:
@@ -122,47 +222,58 @@ def analyze_shot(shot_number):
 
         # Put the raw polychromator data in the analysis tree if it isn't already:
         try:
-            raw_poly_channel_sig = get_data( poly_id + '_RAW', analysis_tree)
+            raw_poly_channel_sig = get_data(poly_id + '_RAW', analysis_tree)
         except Exception as ex:
             raw_poly_channel_sig = get_data('TS_POLY' + poly_id[-3:], data_tree)
             raw_poly_channel_t = get_dim('TS_POLY' + poly_id[-3:], data_tree)
             tree_write_safe(raw_poly_channel_sig, poly_id + '_RAW', dim=raw_poly_channel_t, tree=analysis_tree)
-        raw_poly_channel_t = get_dim(poly_id + '_RAW', analysis_tree)
 
-        # Average the closest vacuum shots with their energies scaled, checking first and putting the vacuum shot
-        # in the tree if necessary
-        try:
-            poly_channel_vacuum_avg = get_data(poly_id + '_VAC', analysis_tree)
-        except Exception as ex:
-            pass
+        # Set up a vacuum shot if this is a plasma shot:
+        if log_book.loc[log_book.Shot == shot_number, 'Fuel'].array[0] != 'V' and log_book.loc[log_book.Shot == shot_number, 'Fuel'].array[0] != '-':
+            try:
+                poly_channel_vacuum_avg = get_data(poly_id + '_VAC', analysis_tree)
+            except Exception as ex:
+                vacuum_sig = {}
+                vacuum_t = {}
+                ctr = 0
+                for vac_shot in vacuum_shot_list:
+                    try:
+                        vac_tree = Tree('analysis3', vac_shot)
+                        vacuum_sig[ctr] = get_data(poly_id + '_RAW', vac_tree)
+                        vacuum_t[ctr] = get_dim(poly_id + '_RAW', vac_tree)
+                    except Exception as ex:
+                        vac_tree.close()
+                        build_shot(vac_shot)
+                        log_book = get_ts_logbook()
+                        # print(str(vac_shot) + ' ' + poly_id + '_RAW')
+                        vac_tree = Tree('analysis3', vac_shot)
+                        vacuum_sig[ctr] = get_data(poly_id + '_RAW', vac_tree)
+                        vacuum_t[ctr] = get_dim(poly_id + '_RAW', vac_tree)
+
+                    vac_tree.close()
+                    peak_vac_time = log_book.loc[log_book.Shot == vac_shot, 'Pulse_Time'].array[0]
+                    vacuum_sig[ctr] = signal.detrend(slide_trace(peak_vac_time, peak_laser_time, vacuum_sig[ctr], vacuum_t[ctr]))
+                    ctr = ctr + 1
+                    # # Write the new logbook dataframe to the master logbook file
+                    # log_book.to_csv(record_filename, index=False)
+                    # log_book.to_csv(latest_filename, index=False)
 
 
+                poly_channel_vacuum_avg = np.array([trace for trace in vacuum_sig.values()]).mean(axis=0)
+                tree_write_safe(poly_channel_vacuum_avg, poly_id + '_VAC', dim=vacuum_t[0], tree=analysis_tree)
 
-
-
-
-
-
-
-
-    # calculate and store the electron energy distribution function,
-    # including temperature, density, and electron drift velocity
-
-    # Get the vacuum shot to use for stray light background subtraction, using an average of every vacuum shot from the
-    # same day as the plasma shot, or the nearest day with a vacuum shot:
-
-
-
+    # Load the data, analysis, and model trees
+    data_tree.close()
+    analysis_tree.close()
+    model_tree.close()
 
     # Write the new logbook dataframe to the master logbook file
-    record_filename = 'TS_analysis_logbook' + datetime.date.today().isoformat() + '.csv'
-    latest_filename = 'TS_analysis_logbook.csv'
-
     log_book.to_csv(record_filename, index=False)
     log_book.to_csv(latest_filename, index=False)
 
 
-def get_ts_logbook(force_update=None):
+
+def get_ts_logbook(verbose=None, force_update=None):
     """
     Pull in the logbook information from the TS_Logbook Google sheet, parse it, and return a version of it
     for use in the TS analysis.
@@ -198,7 +309,8 @@ def get_ts_logbook(force_update=None):
     try:
         latest_ts_log = pd.read_csv(latest_filename)
         if latest_ts_log['Shot'].iloc[-1] == raw_ts_log['Shot'].iloc[-1] and force_update is None:
-            print('Using previous analysis logbook...')
+            if verbose == 1:
+                print('Using previous analysis logbook...')
             return latest_ts_log
         else:
             latest_ts_log = pd.concat([latest_ts_log, raw_ts_log], ignore_index=True, sort=False).drop_duplicates(subset=['Shot'])
@@ -207,7 +319,8 @@ def get_ts_logbook(force_update=None):
         try:
             latest_ts_log = pd.read_csv(latest_filename)
             if latest_ts_log['Shot'].iloc[-1] == raw_ts_log['Shot'].iloc[-1] and force_update is None:
-                print('Using previously pulled logbook...')
+                if verbose == 1:
+                    print('Using previously pulled logbook...')
                 return latest_ts_log
             else:
                 pass
@@ -735,8 +848,14 @@ def get_vacuum_shot_list(shot_number, log_book, number_vacuum_shots):
                                                                                     and log_book.loc[log_book.Shot == shot, 'Jack_Height'].array[0] ==
                                                                                         log_book.loc[log_book.Shot == shot_number, 'Jack_Height'].array[0]])
         ctr = ctr + 1
-    return vac_list.astype(int)[0:number_vacuum_shots]
+    vac_list = [np.int(shot_str) for shot_str in vac_list]
+    return vac_list[0:number_vacuum_shots]
 
+
+def slide_trace(current_peak_pulse_time, target_peak_pulse_time, trace, trace_t):
+    dt = np.diff(trace_t).mean()
+    slid_trace = np.roll(trace, np.int(np.round((target_peak_pulse_time - current_peak_pulse_time)/dt)))
+    return slid_trace
 
 def interleave(list1, list2):
     newlist = []
@@ -936,6 +1055,31 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_5_3_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAC:CHANNEL_3', 'SIGNAL', 'V', 's'],
                                          ['POLY_5_4_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAC:CHANNEL_4', 'SIGNAL', 'V', 's'],
                                          ['POLY_5_5_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAC:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_1_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAC:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_2_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SIG:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_3_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SIG:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_4_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SIG:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_5_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SIG:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_1_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.SIG:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_2_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.SIG:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_3_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.SIG:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_4_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.SIG:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_2_5_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.SIG:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_1_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.SIG:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_2_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.SIG:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_3_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.SIG:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_4_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.SIG:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_3_5_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.SIG:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_1_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.SIG:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_2_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.SIG:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_3_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.SIG:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_4_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.SIG:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_4_5_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.SIG:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_1_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SIG:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_2_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SIG:CHANNEL_2', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_3_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SIG:CHANNEL_3', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_4_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SIG:CHANNEL_4', 'SIGNAL', 'V', 's'],
+                                         ['POLY_5_5_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SIG:CHANNEL_5', 'SIGNAL', 'V', 's'],
                                          ['LASER_E_FAC', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.LASER_E_FAC', 'NUMERIC', '', ''],
                                          ['ENERGY', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY', 'NUMERIC', 'J', ''],
                                          ['ENERGY_PD', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY_PD', 'SIGNAL', 'V', 's'],
@@ -944,37 +1088,6 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['FIRE_TIME', 'ANALYSIS3::TOP.THOMSON.LASER:FIRE_TIME', 'NUMERIC', 's', '']
                                          ],
                                          columns=['Tag', 'Path', 'Usage', 'Units', 'dim_Units'])
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
