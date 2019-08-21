@@ -10,6 +10,8 @@ Created on Tue Jul  9 16:40:22 2019
 import matplotlib.pyplot as plt   # plotting
 import datetime
 import scipy.signal as signal     # for signal operations like detrending, etc.
+import statsmodels.api as sm
+import scipy.stats as st
 import re                         # for string with wildcard character matching
 import numpy as np                # math
 from scipy.io import loadmat      # for loading matlab files
@@ -20,13 +22,17 @@ import requests                   # grabbing the TS logbook from google sheets
 from MDSplus import Connection, Tree, Data
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
+import pymc3 as pm
 
 
 PLOTS_ON = 1
 FORCE_NEW_NODES = 1
-photodiode_baseline_record_fraction = 0.15 # the fraction of the ruby photodiode record to take as the baseline
+photodiode_baseline_record_fraction = 0.15  # the fraction of the ruby photodiode record to take as the baseline
 num_vacuum_shots = 4
-style = 'Freq'  # 'Bayes' for Bayesian analysis or 'Freq' for frequentist/ratio evaluation method
+FAST_GAIN = 1
+E_CHARGE = 1.60217662*10**(-19)  # [coulombs]
+R_FEEDBACK = 50000  # feedback resistance, [ohms]
+style = 'Bayes'  # 'Bayes' for Bayesian analysis or 'Ratio' for ratio evaluation method
 sns.set()   # Set the plotting theme
 
 
@@ -40,6 +46,8 @@ def analyze_shot(shot_number):
     Returns
     -------
     """
+
+
     # Load the analysis tree and the log book
     analysis_tree = Tree('analysis3', shot_number, 'EDIT')
     log_book = get_ts_logbook(verbose=1)
@@ -77,8 +85,18 @@ def analyze_shot(shot_number):
     # Get the geometric parameters for the measurements of shot_number
     # geometry = get_spot_geometry(log_book.loc[log_book.Shot == shot_number, 'Mount_Positions'].array[0], log_book.loc[log_book.Shot == shot_number, 'Jack_Height'].array[0])
 
+    # Lists to define the scattering windows for each polychromator:
+    scattering_window_start = list([0,0,0,0,0])
+    scattering_window_end = list([-1,-1,-1,-1,-1])
+
+
+
     # Analyze all active polychromator channels
     for poly_id in poly_list:
+
+        # An integer to identify the polychromator number
+        poly_num = np.int(poly_id[5])
+        channel_num = np.int(poly_id[-1])
 
         # Get the raw polychromator data:
         raw_poly_channel_sig = get_data(poly_id + '_RAW', analysis_tree)
@@ -87,16 +105,64 @@ def analyze_shot(shot_number):
         # Detrend and otherwise clean up the raw signals
         clean_poly_channel_sig = signal.savgol_filter(signal.detrend(raw_poly_channel_sig), 101, 3)
         clean_poly_channel_t = raw_poly_channel_t
+        dt = np.mean(np.diff(raw_poly_channel_t))
         tree_write_safe(clean_poly_channel_sig, poly_id + '_SIG', dim=clean_poly_channel_t, tree=analysis_tree)
 
+        # Get the vacuum shot:
         # Average the closest previous/subsequent comparable vacuum shots with their energies scaled, checking first
         # and putting the vacuum shot in the tree if necessary
-        poly_channel_vacuum_avg = get_data(poly_id + '_VAC', analysis_tree)
+        vacuum_avg = get_data(poly_id + '_VAC', analysis_tree)
+        vacuum_avg_clean = signal.savgol_filter(signal.detrend(vacuum_avg), 101, 3)
+
+        # Find the signal voltage and the standard deviation signal voltage of the background
+        if channel_num == 1:
+            signal_voltage = np.max(clean_poly_channel_sig)
+            scattering_window_start[poly_num - 1] = np.where(clean_poly_channel_sig > 0.2*signal_voltage)[0][0]
+            scattering_window_end[poly_num - 1] = np.where(clean_poly_channel_sig > 0.2*signal_voltage)[0][-1]
+        else:
+            signal_voltage = np.max(clean_poly_channel_sig[scattering_window_start[poly_num - 1]:scattering_window_end[poly_num - 1]])
+
+        background_voltage = np.std(np.r_[raw_poly_channel_sig[0:scattering_window_start[poly_num - 1] - 200], raw_poly_channel_sig[0:scattering_window_end[poly_num - 1] + 1000]])
+
+        # Get the calibration string based on the shot number:
+        cal_string = get_cal_string(shot_number, poly_id)
+
+        # Use the signal voltage to find the number of photoelectrons n_pe
+        capacitance = get_data(cal_string.replace('TYPE?', 'C'), analysis_tree)
+        pulse_width_time = (scattering_window_end[poly_num - 1] - scattering_window_start[poly_num - 1])*dt
+        if(cal_string[9] != 'H'):
+            amplifier_gain = 75
+        else:
+            amplifier_gain = 75/2
+
+        n_pe = signal_voltage*pulse_width_time/(amplifier_gain*E_CHARGE*FAST_GAIN*R_FEEDBACK*(1 - np.exp(-pulse_width_time/(R_FEEDBACK*capacitance))))
+        n_background = background_voltage*n_pe/signal_voltage
+
+        # Find the same quantities for the stray (vacuum) light:
+        stray_voltage = np.max(vacuum_avg_clean[scattering_window_start[poly_num - 1]:scattering_window_end[poly_num - 1]])
+
+        background_stray_voltage = np.std(np.r_[vacuum_avg[0:scattering_window_start[poly_num - 1] - 200], vacuum_avg[0:scattering_window_end[poly_num - 1] + 1000]])
+
+        # Use the voltage to find the number of photoelectrons
+        n_stray = stray_voltage*pulse_width_time/(amplifier_gain*E_CHARGE*FAST_GAIN*R_FEEDBACK*(1 - np.exp(-pulse_width_time/(R_FEEDBACK*capacitance))))
+        n_background_stray = background_stray_voltage*n_stray/stray_voltage
+
+        # Calculate the variances of the measured data:
+        var_pe = 4*(n_pe + n_background)
+        var_stray = 4*(n_stray + n_background_stray)
+        var_bg = 4*n_background
+        var_scat = var_pe + var_stray
+
+
+
+
 
 
 
     # calculate and store the electron energy distribution function,
     # including temperature, density, and electron drift velocity
+
+    # first calculate the
 
 
     # Get the vacuum shot to use for stray light background subtraction, using an average of every vacuum shot from the
@@ -146,12 +212,29 @@ def build_shot(shot_number):
     put_cals_in_tree(analysis_tree)
 
     # and the laser energy calibration
+
+
     try:
-        laser_energy_calibration_factor = get_data('LASER_E_FAC', analysis_tree)
+        laser_energy_calibration_slope = get_data('LASER_E_SLOPE', analysis_tree)
+        laser_energy_calibration_int = get_data('LASER_E_INT', analysis_tree)
     except Exception as ex:
         if ex.msgnam == 'NNF' or ex.msgnam == 'NODATA':
-            laser_energy_calibration_factor = get_data('LASER_E_FAC', model_tree)
-            tree_write_safe(laser_energy_calibration_factor, 'LASER_E_FAC', tree=analysis_tree)
+            laser_energy_calibration_slope = get_data('LASER_E_SLOPE', model_tree)
+            tree_write_safe(laser_energy_calibration_slope, 'LASER_E_SLOPE', tree=analysis_tree)
+            laser_energy_calibration_int = get_data('LASER_E_INT', model_tree)
+            tree_write_safe(laser_energy_calibration_int, 'LASER_E_INT', tree=analysis_tree)
+        else:
+             print(ex)
+
+    try:
+        laser_energy_calibration_slope_bayes = get_data('LASER_E_SLOPE_B', analysis_tree)
+        laser_energy_calibration_int_bayes = get_data('LASER_E_INT_B', analysis_tree)
+    except Exception as ex:
+        if ex.msgnam == 'NNF' or ex.msgnam == 'NODATA':
+            laser_energy_calibration_slope_bayes = get_data('LASER_E_SLOPE_B', model_tree)
+            tree_write_safe(laser_energy_calibration_slope_bayes, 'LASER_E_SLOPE_B', tree=analysis_tree)
+            laser_energy_calibration_int_bayes = get_data('LASER_E_INT_B', model_tree)
+            tree_write_safe(laser_energy_calibration_int_bayes, 'LASER_E_INT_B', tree=analysis_tree)
         else:
             print(ex)
 
@@ -173,20 +256,32 @@ def build_shot(shot_number):
     # Calculate and store the laser energy
     try:
         laser_energy = get_data('ENERGY', analysis_tree)
+        laser_energy_bayes = get_data('ENERGY_BAYES', analysis_tree)
     except Exception as ex:
         if ex.msgnam == 'NNF' or ex.msgnam == 'NODATA':
             energy_photodiode_sig = get_data('TS_RUBY', data_tree)
             energy_photodiode_t = get_dim('TS_RUBY', data_tree)
             photodiode_baseline = np.mean(energy_photodiode_sig[0:np.int(np.around(np.size(energy_photodiode_sig, 0)*photodiode_baseline_record_fraction))])
             energy_photodiode_sig = energy_photodiode_sig - photodiode_baseline
-            laser_energy = laser_energy_calibration_factor*np.trapz(energy_photodiode_sig, energy_photodiode_t)
+            integrated_photodiode = np.trapz(energy_photodiode_sig, energy_photodiode_t)
+            laser_energy = (integrated_photodiode - laser_energy_calibration_int)/laser_energy_calibration_slope
+            laser_energy_bayes = np.mean((integrated_photodiode - laser_energy_calibration_int_bayes)/laser_energy_calibration_slope_bayes)
             tree_write_safe(energy_photodiode_sig, 'ENERGY_PD', dim=energy_photodiode_t, tree=analysis_tree)
             tree_write_safe(laser_energy, 'ENERGY', tree=analysis_tree)
+            tree_write_safe(laser_energy_bayes, 'ENERGY_BAYES', tree=analysis_tree)
         else:
             print(ex)
 
+    # kde = sm.nonparametric.KDEUnivariate((integrated_photodiode - laser_energy_calibration_int_bayes)/laser_energy_calibration_slope_bayes)
+    # kde.fit()
+    # kde.support
+    # kde.density
+    # # p = pm.kdeplot((integrated_photodiode - laser_energy_calibration_int_bayes)/laser_energy_calibration_slope_bayes)
+    # # x,y = p.get_lines()[0].get_data()
+
     # Add the determined laser energy to the log book
     log_book.loc[log_book.Shot == shot_number, 'Energy'] = laser_energy
+    log_book.loc[log_book.Shot == shot_number, 'Energy_Bayes'] = laser_energy_bayes
 
     # Get the photodiode energy trace
     energy_photodiode_sig = get_data('ENERGY_PD', analysis_tree)
@@ -241,6 +336,7 @@ def build_shot(shot_number):
                         vac_tree = Tree('analysis3', vac_shot)
                         vacuum_sig[ctr] = get_data(poly_id + '_RAW', vac_tree)
                         vacuum_t[ctr] = get_dim(poly_id + '_RAW', vac_tree)
+                        vac_energy = get_data('ENERGY', vac_tree)
                     except Exception as ex:
                         vac_tree.close()
                         build_shot(vac_shot)
@@ -249,17 +345,15 @@ def build_shot(shot_number):
                         vac_tree = Tree('analysis3', vac_shot)
                         vacuum_sig[ctr] = get_data(poly_id + '_RAW', vac_tree)
                         vacuum_t[ctr] = get_dim(poly_id + '_RAW', vac_tree)
+                        vac_energy = get_data('ENERGY', vac_tree)
 
                     vac_tree.close()
                     peak_vac_time = log_book.loc[log_book.Shot == vac_shot, 'Pulse_Time'].array[0]
-                    vacuum_sig[ctr] = signal.detrend(slide_trace(peak_vac_time, peak_laser_time, vacuum_sig[ctr], vacuum_t[ctr]))
+                    # vacuum_sig[ctr] = signal.detrend(slide_trace(peak_vac_time, peak_laser_time, vacuum_sig[ctr], vacuum_t[ctr]))/vac_energy
+                    vacuum_sig[ctr] = slide_trace(peak_vac_time, peak_laser_time, vacuum_sig[ctr], vacuum_t[ctr])/vac_energy
                     ctr = ctr + 1
-                    # # Write the new logbook dataframe to the master logbook file
-                    # log_book.to_csv(record_filename, index=False)
-                    # log_book.to_csv(latest_filename, index=False)
 
-
-                poly_channel_vacuum_avg = np.array([trace for trace in vacuum_sig.values()]).mean(axis=0)
+                poly_channel_vacuum_avg = signal.savgol_filter(signal.detrend(np.array([trace*laser_energy for trace in vacuum_sig.values()]).mean(axis=0)), 101, 3)
                 tree_write_safe(poly_channel_vacuum_avg, poly_id + '_VAC', dim=vacuum_t[0], tree=analysis_tree)
 
     # Load the data, analysis, and model trees
@@ -270,7 +364,6 @@ def build_shot(shot_number):
     # Write the new logbook dataframe to the master logbook file
     log_book.to_csv(record_filename, index=False)
     log_book.to_csv(latest_filename, index=False)
-
 
 
 def get_ts_logbook(verbose=None, force_update=None):
@@ -373,8 +466,7 @@ def get_ts_logbook(verbose=None, force_update=None):
         fiber_mount_string = raw_ts_log['Fiber Mount Positions (in order polys. 12345)'].iloc[ind]
         jack_height = raw_ts_log['Lab jack height (in.)'].iloc[ind]
         geometry_oneshot_dataframe = get_spot_geometry(fiber_mount_string, jack_height)
-        r_oneshot_dataframe = pd.DataFrame(data=[geometry_oneshot_dataframe['R'].array],
-                                           columns=['radius_poly_' + str(p) for p in geometry_oneshot_dataframe['polychromator']])
+        r_oneshot_dataframe = pd.DataFrame(data=[geometry_oneshot_dataframe['R'].array], columns=['radius_poly_' + str(p) for p in geometry_oneshot_dataframe['polychromator']])
         geometry_parse_dataframe = pd.concat([geometry_parse_dataframe, r_oneshot_dataframe.astype(np.float64)], ignore_index=True, sort=False)
 
     generated_ts_log = pd.concat([generated_ts_log, geometry_parse_dataframe], axis=1)
@@ -520,7 +612,7 @@ def get_spot_geometry(fiber_mount_string_in, jack_height_in):
     return(geom_dataframe)
 
 
-def update_energy_cal(log_book):
+def update_energy_cal():
     """
     Update the regression used to create a calibration factor for converting the
     photodiode response to an energy measurement
@@ -535,7 +627,7 @@ def update_energy_cal(log_book):
 
     hit_conn = Connection('landau.hit')
 
-    #    LB = get_TS_logbook()
+    log_book = get_ts_logbook()
     energy_measured = log_book.Energy[log_book.Fuel == 'ETEST']
     energy_integrated = pd.Series()
     for shot in log_book.Shot[log_book.Fuel == 'ETEST']:
@@ -545,7 +637,7 @@ def update_energy_cal(log_book):
             flux_photodiode_t = np.array(hit_conn.get("DIM_OF(\\TS_RUBY)"))
         except EOFError:
             print("WARNING: Error reading photodiode data from shot", shot)
-            return -1
+            # return -1
             pass
 
         flux_baseline = np.mean(flux_photodiode[0:np.int(np.around(np.size(flux_photodiode, 0)*photodiode_baseline_record_fraction))])
@@ -553,36 +645,32 @@ def update_energy_cal(log_book):
 
         energy_integrated = energy_integrated.append(pd.Series([np.trapz(flux_photodiode, flux_photodiode_t)]), ignore_index=True)
 
-    if style == 'Freq':
 
-        # A = np.transpose(np.array([energy_measured, (np.ones_like(energy_measured))]))
-        # m, c = np.linalg.lstsq(A, energy_integrated,rcond=None)[0]
-        energy_integrated = energy_integrated.to_numpy().reshape(-1, 1)
-        energy_measured = energy_measured.to_numpy().reshape(-1, 1)
 
-        # Model initialization
-        regression_model = LinearRegression()
+    # A = np.transpose(np.array([energy_measured, (np.ones_like(energy_measured))]))
+    # m, c = np.linalg.lstsq(A, energy_integrated,rcond=None)[0]
+    energy_integrated = energy_integrated.to_numpy().reshape(-1, 1)
+    energy_measured = energy_measured.to_numpy().reshape(-1, 1)
 
-        # Fit the data(train the model)
-        regression_model.fit(energy_measured, energy_integrated)
+    # Model initialization
+    regression_model = LinearRegression()
 
-        # Predict
-        energy_predicted = regression_model.predict(energy_measured)
+    # Fit the data
+    regression_model.fit(energy_measured, energy_integrated)
 
-        # model evaluation
-        rmse = mean_squared_error(energy_integrated, energy_predicted)
-        r2 = r2_score(energy_integrated, energy_predicted)
-        m = regression_model.coef_
-        c = regression_model.intercept_
-    elif style == 'Bayes':
-        pass
-    else:
-        print('****Pick a style that"s either Bayes or Freq****')
+    # Predict
+    energy_predicted = regression_model.predict(energy_measured)
+
+    # model evaluation
+    rmse = mean_squared_error(energy_integrated, energy_predicted)
+    r2 = r2_score(energy_integrated, energy_predicted)
+    m = regression_model.coef_[0][0]
+    b = regression_model.intercept_[0]
 
     if PLOTS_ON == 1:
         # printing values
         print('Slope:', m)
-        print('Intercept:', c)
+        print('Intercept:', b)
         print('Root mean squared error: ', rmse)
         print('R2 score: ', r2)
 
@@ -590,15 +678,64 @@ def update_energy_cal(log_book):
         ax1.set_title("Linear regression")
         ax1.set_xlabel(r"$E_{meter} [J]$")
         ax1.set_ylabel(r"$E_{photodiode} [J]$")
-        ax1.plot(energy_measured, energy_integrated/m, 'o', label='Original data', markersize=2)
-        ax1.plot(np.arange(0, 10), regression_model.predict(np.arange(0, 10).reshape(-1, 1))/m, label='Fitted line')
-        ax1.plot(np.arange(0, 10), np.arange(0, 10), color='k', ls='--', linewidth=0.5)
+        ax1.plot(energy_measured, energy_integrated, 'o', label='Original data', markersize=2)
+        ax1.plot(np.arange(0, 10), regression_model.predict(np.arange(0, 10).reshape(-1, 1)), label='Fitted line')
+        # ax1.plot(np.arange(0, 10), np.arange(0, 10), color='k', ls='--', linewidth=0.5)
         ax1.legend()
         ax1.grid(ls='--')
 
-        print(1/m)
+    tree_write_safe(m, 'LASER_E_SLOPE')
+    tree_write_safe(b, 'LASER_E_INT')
 
-    tree_write_safe(1/m, 'LASER_E_FAC')
+    with pm.Model() as linear_model:
+        # Intercept
+        intercept = pm.Normal('intercept', mu=0, sd=5)
+        # intercept = pm.Uniform('intercept',lower=0, upper=1)
+
+        # Slope
+        # slope = pm.Normal('slope', mu=0, sd=10)
+        slope = pm.Uniform('slope',lower=0, upper=1)
+
+        # Standard deviation
+        sigma = pm.HalfNormal('sigma', sd=10)
+
+        # Estimate of mean
+        mean = intercept + slope*energy_measured
+
+        # Observed values
+        Y_obs = pm.Normal('Y_obs', mu=mean, sd=sigma, observed=energy_integrated)
+
+        # Sampler
+        step = pm.NUTS(target_accept=0.95)
+
+        # Posterior distribution
+        linear_trace = pm.sample(2000, step, tune=4000)
+        # linear_trace = pm.sample(1000, step, tune=2000)
+        pm.summary(linear_trace)
+
+    if PLOTS_ON == 1:
+        pm.traceplot(linear_trace, figsize=(12, 12))
+        pm.plot_posterior(linear_trace, figsize=(12, 10), text_size=20, credible_interval=0.95, round_to=12)
+        # pm.forestplot(linear_trace)
+
+        plt.figure(figsize=(8, 8))
+        pm.plot_posterior_predictive_glm(linear_trace, samples=100, eval=np.linspace(0, 10, 100), linewidth=1,
+                                         color='red', alpha=0.05, label='Bayesian Posterior Fits',
+                                         lm=lambda x, sample: sample['intercept'] + sample['slope'] * x)
+        plt.scatter(energy_measured[:500], energy_integrated[:500], s=12, alpha=0.8, c='blue', label='Observations')
+
+        # bayes_prediction = (1e-07 - linear_trace['Intercept'])/linear_trace['slope']
+        # plt.figure(figsize = (8, 8))
+        # sns.kdeplot(bayes_prediction, label = 'Bayes Posterior Prediction')
+        # plt.vlines(x = (1e-07 - c)/m,
+        #            ymin = 0, ymax = 2.5,
+        #            label = 'OLS Prediction',
+        #            colors = 'red', linestyles='--')
+        print(pm.summary(linear_trace))
+
+    tree_write_safe(linear_trace['slope'], 'LASER_E_SLOPE_B')
+    tree_write_safe(linear_trace['intercept'], 'LASER_E_INT_B')
+
 #        fig2, (ax2, ax3) = plt.subplots(nrows=2, ncols=1) # two axes on figures
 #        ax2.plot(flux_photodiode_t,flux_photodiode)
 #        ax3.scatter(energy_measured, energy_integrated/m)
@@ -634,10 +771,7 @@ def tree_write_safe(data_to_write, tag_name, dim=None, tree=None):
         if ex.msgnam == 'NNF':
             add_node_safe(tag_name, tree)
         else:
-            template = 'An exception of type {0} occurred. Arguments:\n{1!r}'
-            message = template.format(type(ex).__name__, ex.args)
-            print(message)
-            return -1
+            print(ex)
         node_to_write = tree.getNode('\\' + tag_name)
 
     # then write the data based on what type or "usage" it is (MDSplus terminology)
@@ -684,7 +818,7 @@ def add_node_safe(tag_name_in, tree):
         node_string = '\\' + thomson_tree_lookup['Path'][thomson_tree_lookup['Tag'] == tag_name_in].values[0]
     except Exception as ex:
         if str(ex.args) == "('index 0 is out of bounds for axis 0 with size 0',)":
-            print('!*!*!*!*! INVALID TAG NAME !*!*!*!*!*! \nCheck global variable thomson_tree_lookup or tag_name_in in function add_node_safe(). ')
+            print('!*!*!*!*! INVALID TAG NAME !*!*!*!*!*! \nCheck global variable thomson_tree_lookup or tag_name_in in function add_node_safe().')
         else:
             print('***ERROR in add_node_safe()***')
 
@@ -769,6 +903,22 @@ def put_cals_in_tree(tree=None):
                      'CAL_3_CH_POLY_3_V_1', 'CAL_3_CH_POLY_3_V_2', 'CAL_3_CH_POLY_3_V_3',
                      'CAL_3_CH_POLY_4_T_1', 'CAL_3_CH_POLY_4_T_2', 'CAL_3_CH_POLY_4_T_3',
                      'CAL_3_CH_POLY_4_V_1', 'CAL_3_CH_POLY_4_V_2', 'CAL_3_CH_POLY_4_V_3']
+    
+    # slow_to_fast_cal = []
+    capacitance_5ch = 10**(-12)*np.array([[np.NAN,np.NAN,np.NAN,np.NAN,np.NAN],
+                                          [np.NAN,np.NAN,np.NAN,np.NAN,np.NAN],
+                                          [1.1852,1.1895,1.1665,1.2006,1.1805],
+                                          [1.1891,1.1586,1.1927,1.1836,1.1642],
+                                          [1.1985,1.2131,1.2138,1.2433,1.1757]])
+    
+    capacitance_3ch = 10**(-12)*np.array([[1.1985,1.2131,1.2138],
+                                          [1.1757,1.1999,1.1872],
+                                          [1.1852,1.1895,1.1665],
+                                          [1.1891,1.1586,1.1927]])
+    
+    max_transmission = list([0,0,0])
+    # pulse time from Kiyong's fast/slow calibration:
+    t_0 = 30e-9
 
     if tree is None:
         tree = Tree('analysis3', -1, 'EDIT')
@@ -776,30 +926,81 @@ def put_cals_in_tree(tree=None):
         for poly_tag in cal_poly_list:
             info_list = poly_tag.rsplit(sep='_')
             if info_list[1] == '3':
+                # path_to_load = '/Users/chris/Dropbox/HIT_TS/Calibrations/3_CH/P' + info_list[-3] + '.mat'
                 path_to_load = '/home/everson/Dropbox/HIT_TS/Calibrations/3_CH/P' + info_list[-3] + '.mat'
+                capacitance = capacitance_3ch
+                max_ind = 0
             else:
+                # path_to_load = '/Users/chris/Dropbox/HIT_TS/Calibrations/5_CH_' + info_list[3] + '/P' + info_list[-3] + '.mat'
                 path_to_load = '/home/everson/Dropbox/HIT_TS/Calibrations/5_CH_' + info_list[3] + '/P' + info_list[-3] + '.mat'
+                capacitance = capacitance_5ch
+                if info_list[3] == 'FG':
+                    max_ind = 1
+                else:
+                    max_ind = 2
+
 
             loaded_mat = loadmat(path_to_load, struct_as_record=False)
             poly_string = 'p' + info_list[-3]
-            transmission = loaded_mat[poly_string][0][0].t
+            poly_num = np.int(info_list[-3])
+            channel_num = np.int(info_list[-1])
+            tau = 50000*capacitance[poly_num - 1, channel_num - 1]
+            v_slow_to_fast_factor = (1/2)*((1 - np.exp(-t_0/tau))/(1 - np.exp(-t_0/2.46e-7)))
+            transmission = (loaded_mat[poly_string][0][0].t)*v_slow_to_fast_factor
+            if np.max(transmission) > max_transmission[max_ind]:
+                max_transmission[max_ind] = np.max(transmission)
             wavelength = loaded_mat[poly_string][0][0].l
             variance = loaded_mat[poly_string][0][0].v
             channel_index = int(info_list[-1]) - 1
-
+            
+            
+            
             if info_list[-2] == 'V':
                 tree_write_safe(variance[channel_index], poly_tag, dim=wavelength[0], tree=tree)
             else:
                 tree_write_safe(transmission[channel_index], poly_tag, dim=wavelength[0], tree=tree)
-        tree.close()
-    else:
-        analysis_tree = Tree('analysis3', -1)
+                c_tag = poly_tag.replace('T','C')
+                tree_write_safe(capacitance[poly_num - 1, channel_num - 1], c_tag, tree=tree)
+
         for poly_tag in cal_poly_list:
+            if poly_tag[-3] == 'T':
+                data_t = get_data(poly_tag, tree)
+                wavelength = get_dim(poly_tag, tree)
+                if poly_tag[9] == 'F':
+                    max_ind = 1
+                elif poly_tag[9] == 'H':
+                    max_ind = 2
+                else:
+                    max_ind = 0
+                data_t = data_t/max_transmission[max_ind]
+                tree_write_safe(data_t, poly_tag, dim=wavelength, tree=tree)
+            else:
+                pass
+
+        tree.close()
+
+    else:
+
+        for poly_tag in cal_poly_list:
+            info_list = poly_tag.rsplit(sep='_')
+            analysis_tree = Tree('analysis3', -1)
+
+            if info_list[1] == '3':
+                capacitance = capacitance_3ch
+            else:
+                capacitance = capacitance_5ch
             poly_string = '\\' + poly_tag
-            data_to_write = analysis_tree.getNode(poly_string).getData().data()
-            data_to_write_t = analysis_tree.getNode(poly_string).dim_of().data()
+            poly_num = np.int(info_list[-3])
+            channel_num = np.int(info_list[-1])
+            data_to_write = get_data(poly_tag, analysis_tree)
+            data_to_write_t = get_dim(poly_tag, analysis_tree)
 
             tree_write_safe(data_to_write, poly_tag, dim=data_to_write_t, tree=tree)
+
+            if poly_tag[-3] == 'T':
+                c_tag = poly_tag.replace('T', 'C')
+                data_to_write_c = get_data(c_tag, analysis_tree)
+                tree_write_safe(data_to_write_c, c_tag, tree=tree)
 
 
 def show_tree_node(tag_name, tree):
@@ -814,6 +1015,24 @@ def get_data(tag_name, tree):
 def get_dim(tag_name, tree):
     t = tree.getNode('\\' + tag_name).dim_of().data()
     return t
+
+
+def get_cal_string(shot_number, poly_id):
+    # An integer to identify the polychromator number
+    poly_num = np.int(poly_id[5])
+    channel_num = np.int(poly_id[-1])
+    return_string = 'CAL_'
+    if shot_number < 181008002:
+        return_string = return_string + '3_CH_POLY_' + str(poly_num) + '_TYPE?_' + str(channel_num)
+    elif shot_number < 190403014:
+        if poly_num < 3:
+            return_string = return_string + '3_CH_POLY_' + str(poly_num) + '_TYPE?_' + str(channel_num)
+        else:
+            return_string = return_string + '5_CH_FG_POLY_' + str(poly_num) + '_TYPE?_' + str(channel_num)
+    else:
+        return_string = return_string + '5_CH_HG_POLY_' + str(poly_num) + '_TYPE?_' + str(channel_num)
+
+    return return_string
 
 
 def get_vacuum_shot_list(shot_number, log_book, number_vacuum_shots):
@@ -896,6 +1115,18 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['CAL_3_CH_POLY_4_V_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_4:VARIANCE_1', 'SIGNAL', '', 'm'],
                                          ['CAL_3_CH_POLY_4_V_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_4:VARIANCE_2', 'SIGNAL', '', 'm'],
                                          ['CAL_3_CH_POLY_4_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_4:VARIANCE_3', 'SIGNAL', '', 'm'],
+                                         ['CAL_3_CH_POLY_1_C_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_1:CFB_1', 'NUMERIC', 'F', ''],
+                                         ['CAL_3_CH_POLY_1_C_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_1:CFB_2', 'NUMERIC', 'F', ''],
+                                         ['CAL_3_CH_POLY_1_C_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_1:CFB_3', 'NUMERIC', 'F', ''],
+                                         ['CAL_3_CH_POLY_2_C_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2:CFB_1', 'NUMERIC', 'F', ''],
+                                         ['CAL_3_CH_POLY_2_C_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2:CFB_2', 'NUMERIC', 'F', ''],
+                                         ['CAL_3_CH_POLY_2_C_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_2:CFB_3', 'NUMERIC', 'F', ''],
+                                         ['CAL_3_CH_POLY_3_C_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_3:CFB_1', 'NUMERIC', 'F', ''],
+                                         ['CAL_3_CH_POLY_3_C_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_3:CFB_2', 'NUMERIC', 'F', ''],
+                                         ['CAL_3_CH_POLY_3_C_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_3:CFB_3', 'NUMERIC', 'F', ''],
+                                         ['CAL_3_CH_POLY_4_C_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_4:CFB_1', 'NUMERIC', 'F', ''],
+                                         ['CAL_3_CH_POLY_4_C_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_4:CFB_2', 'NUMERIC', 'F', ''],
+                                         ['CAL_3_CH_POLY_4_C_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.3_CHANNEL.POLY_4:CFB_3', 'NUMERIC', 'F', ''],
                                          ['CAL_5_CH_FG_POLY_3_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:TRANS_1', 'SIGNAL', 'arb', 'm'],
                                          ['CAL_5_CH_FG_POLY_3_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:TRANS_2', 'SIGNAL', 'arb', 'm'],
                                          ['CAL_5_CH_FG_POLY_3_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:TRANS_3', 'SIGNAL', 'arb', 'm'],
@@ -906,6 +1137,11 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['CAL_5_CH_FG_POLY_3_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:VARIANCE_3', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_FG_POLY_3_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:VARIANCE_4', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_FG_POLY_3_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_3_C_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:CFB_1', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_FG_POLY_3_C_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:CFB_2', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_FG_POLY_3_C_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:CFB_3', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_FG_POLY_3_C_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:CFB_4', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_FG_POLY_3_C_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_3:CFB_5', 'NUMERIC', 'F', ''],
                                          ['CAL_5_CH_FG_POLY_4_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:TRANS_1', 'SIGNAL', 'arb', 'm'],
                                          ['CAL_5_CH_FG_POLY_4_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:TRANS_2', 'SIGNAL', 'arb', 'm'],
                                          ['CAL_5_CH_FG_POLY_4_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:TRANS_3', 'SIGNAL', 'arb', 'm'],
@@ -916,6 +1152,11 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['CAL_5_CH_FG_POLY_4_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:VARIANCE_3', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_FG_POLY_4_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:VARIANCE_4', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_FG_POLY_4_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_4_C_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:CFB_1', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_FG_POLY_4_C_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:CFB_2', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_FG_POLY_4_C_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:CFB_3', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_FG_POLY_4_C_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:CFB_4', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_FG_POLY_4_C_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_4:CFB_5', 'NUMERIC', 'F', ''],
                                          ['CAL_5_CH_FG_POLY_5_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:TRANS_1', 'SIGNAL', 'arb', 'm'],
                                          ['CAL_5_CH_FG_POLY_5_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:TRANS_2', 'SIGNAL', 'arb', 'm'],
                                          ['CAL_5_CH_FG_POLY_5_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:TRANS_3', 'SIGNAL', 'arb', 'm'],
@@ -926,6 +1167,11 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['CAL_5_CH_FG_POLY_5_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:VARIANCE_3', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_FG_POLY_5_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:VARIANCE_4', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_FG_POLY_5_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_FG_POLY_5_C_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:CFB_1', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_FG_POLY_5_C_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:CFB_2', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_FG_POLY_5_C_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:CFB_3', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_FG_POLY_5_C_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:CFB_4', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_FG_POLY_5_C_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_FG.POLY_5:CFB_5', 'NUMERIC', 'F', ''],
                                          ['CAL_5_CH_HG_POLY_3_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:TRANS_1', 'SIGNAL', 'arb', 'm'],
                                          ['CAL_5_CH_HG_POLY_3_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:TRANS_2', 'SIGNAL', 'arb', 'm'],
                                          ['CAL_5_CH_HG_POLY_3_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:TRANS_3', 'SIGNAL', 'arb', 'm'],
@@ -936,6 +1182,11 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['CAL_5_CH_HG_POLY_3_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:VARIANCE_3', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_HG_POLY_3_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:VARIANCE_4', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_HG_POLY_3_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_3_C_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:CFB_1', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_HG_POLY_3_C_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:CFB_2', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_HG_POLY_3_C_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:CFB_3', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_HG_POLY_3_C_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:CFB_4', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_HG_POLY_3_C_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_3:CFB_5', 'NUMERIC', 'F', ''],
                                          ['CAL_5_CH_HG_POLY_4_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:TRANS_1', 'SIGNAL', 'arb', 'm'],
                                          ['CAL_5_CH_HG_POLY_4_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:TRANS_2', 'SIGNAL', 'arb', 'm'],
                                          ['CAL_5_CH_HG_POLY_4_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:TRANS_3', 'SIGNAL', 'arb', 'm'],
@@ -946,6 +1197,11 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['CAL_5_CH_HG_POLY_4_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:VARIANCE_3', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_HG_POLY_4_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:VARIANCE_4', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_HG_POLY_4_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_4_C_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:CFB_1', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_HG_POLY_4_C_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:CFB_2', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_HG_POLY_4_C_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:CFB_3', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_HG_POLY_4_C_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:CFB_4', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_HG_POLY_4_C_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_4:CFB_5', 'NUMERIC', 'F', ''],
                                          ['CAL_5_CH_HG_POLY_5_T_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:TRANS_1', 'SIGNAL', 'arb', 'm'],
                                          ['CAL_5_CH_HG_POLY_5_T_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:TRANS_2', 'SIGNAL', 'arb', 'm'],
                                          ['CAL_5_CH_HG_POLY_5_T_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:TRANS_3', 'SIGNAL', 'arb', 'm'],
@@ -956,6 +1212,11 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['CAL_5_CH_HG_POLY_5_V_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:VARIANCE_3', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_HG_POLY_5_V_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:VARIANCE_4', 'SIGNAL', '', 'm'],
                                          ['CAL_5_CH_HG_POLY_5_V_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:VARIANCE_5', 'SIGNAL', '', 'm'],
+                                         ['CAL_5_CH_HG_POLY_5_C_1', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:CFB_1', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_HG_POLY_5_C_2', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:CFB_2', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_HG_POLY_5_C_3', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:CFB_3', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_HG_POLY_5_C_4', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:CFB_4', 'NUMERIC', 'F', ''],
+                                         ['CAL_5_CH_HG_POLY_5_C_5', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.SPECTRAL.5_CHANNEL_HG.POLY_5:CFB_5', 'NUMERIC', 'F', ''],
                                          ['POLY_1_LENGTH', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:LENGTH', 'NUMERIC', 'm', ''],
                                          ['POLY_1_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:R', 'NUMERIC', 'm', ''],
                                          ['POLY_1_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:Z', 'NUMERIC', 'm', ''],
@@ -1080,8 +1341,180 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_5_3_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SIG:CHANNEL_3', 'SIGNAL', 'V', 's'],
                                          ['POLY_5_4_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SIG:CHANNEL_4', 'SIGNAL', 'V', 's'],
                                          ['POLY_5_5_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SIG:CHANNEL_5', 'SIGNAL', 'V', 's'],
-                                         ['LASER_E_FAC', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.LASER_E_FAC', 'NUMERIC', '', ''],
+                                         ['POLY_1_1_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_PE:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_1_1_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_STRAY:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_1_1_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_BG:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_1_1_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_SCAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_1_1_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAR_PE:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_1_1_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAR_STRAY:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_1_1_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAR_BG:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_1_1_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAR_SCAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_1_2_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_PE:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_1_2_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_STRAY:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_1_2_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_BG:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_1_2_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_SCAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_1_2_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAR_PE:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_1_2_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAR_STRAY:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_1_2_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAR_BG:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_1_2_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAR_SCAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_1_3_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_PE:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_1_3_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_STRAY:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_1_3_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_BG:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_1_3_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_SCAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_1_3_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAR_PE:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_1_3_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAR_STRAY:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_1_3_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAR_BG:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_1_3_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAR_SCAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_2_1_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.N_PE:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_2_1_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.N_STRAY:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_2_1_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.N_BG:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_2_1_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.N_SCAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_2_1_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAR_PE:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_2_1_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAR_STRAY:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_2_1_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAR_BG:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_2_1_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAR_SCAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_2_2_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.N_PE:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_2_2_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.N_STRAY:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_2_2_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.N_BG:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_2_2_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.N_SCAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_2_2_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAR_PE:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_2_2_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAR_STRAY:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_2_2_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAR_BG:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_2_2_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAR_SCAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_2_3_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.N_PE:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_2_3_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.N_STRAY:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_2_3_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.N_BG:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_2_3_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.N_SCAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_2_3_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAR_PE:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_2_3_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAR_STRAY:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_2_3_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAR_BG:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_2_3_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.VAR_SCAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_3_1_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_PE:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_3_1_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_STRAY:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_3_1_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_BG:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_3_1_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_SCAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_3_1_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_PE:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_3_1_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_STRAY:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_3_1_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_BG:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_3_1_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_SCAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_3_2_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_PE:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_3_2_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_STRAY:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_3_2_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_BG:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_3_2_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_SCAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_3_2_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_PE:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_3_2_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_STRAY:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_3_2_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_BG:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_3_2_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_SCAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_3_3_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_PE:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_3_3_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_STRAY:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_3_3_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_BG:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_3_3_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_SCAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_3_3_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_PE:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_3_3_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_STRAY:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_3_3_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_BG:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_3_3_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_SCAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_3_4_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_PE:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_3_4_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_STRAY:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_3_4_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_BG:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_3_4_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_SCAT:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_3_4_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_PE:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_3_4_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_STRAY:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_3_4_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_BG:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_3_4_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_SCAT:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_3_5_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_PE:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_3_5_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_STRAY:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_3_5_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_BG:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_3_5_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.N_SCAT:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_3_5_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_PE:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_3_5_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_STRAY:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_3_5_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_BG:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_3_5_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.VAR_SCAT:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_4_1_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_PE:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_4_1_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_STRAY:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_4_1_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_BG:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_4_1_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_SCAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_4_1_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_PE:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_4_1_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_STRAY:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_4_1_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_BG:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_4_1_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_SCAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_4_2_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_PE:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_4_2_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_STRAY:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_4_2_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_BG:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_4_2_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_SCAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_4_2_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_PE:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_4_2_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_STRAY:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_4_2_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_BG:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_4_2_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_SCAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_4_3_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_PE:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_4_3_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_STRAY:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_4_3_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_BG:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_4_3_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_SCAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_4_3_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_PE:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_4_3_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_STRAY:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_4_3_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_BG:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_4_3_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_SCAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_4_4_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_PE:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_4_4_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_STRAY:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_4_4_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_BG:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_4_4_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_SCAT:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_4_4_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_PE:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_4_4_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_STRAY:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_4_4_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_BG:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_4_4_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_SCAT:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_4_5_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_PE:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_4_5_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_STRAY:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_4_5_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_BG:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_4_5_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.N_SCAT:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_4_5_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_PE:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_4_5_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_STRAY:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_4_5_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_BG:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_4_5_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.VAR_SCAT:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_5_1_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_PE:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_5_1_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_STRAY:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_5_1_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_BG:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_5_1_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_SCAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_5_1_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_PE:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_5_1_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_STRAY:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_5_1_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_BG:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_5_1_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_SCAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_5_2_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_PE:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_5_2_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_STRAY:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_5_2_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_BG:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_5_2_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_SCAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_5_2_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_PE:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_5_2_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_STRAY:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_5_2_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_BG:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_5_2_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_SCAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_5_3_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_PE:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_5_3_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_STRAY:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_5_3_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_BG:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_5_3_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_SCAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_5_3_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_PE:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_5_3_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_STRAY:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_5_3_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_BG:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_5_3_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_SCAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_5_4_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_PE:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_5_4_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_STRAY:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_5_4_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_BG:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_5_4_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_SCAT:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_5_4_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_PE:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_5_4_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_STRAY:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_5_4_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_BG:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_5_4_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_SCAT:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_5_5_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_PE:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_5_5_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_STRAY:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_5_5_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_BG:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_5_5_N_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.N_SCAT:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_5_5_VAR_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_PE:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_5_5_VAR_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_STRAY:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_5_5_VAR_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_BG:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_5_5_VAR_SCAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAR_SCAT:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['LASER_E_SLOPE', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.LAS_E_SLP', 'NUMERIC', 'V/J', ''],
+                                         ['LASER_E_INT', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.LAS_E_INT', 'NUMERIC', 'V', ''],
+                                         ['LASER_E_SLOPE_B', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.LAS_E_SLP_B', 'SIGNAL', 'V/J', ''],
+                                         ['LASER_E_INT_B', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.LAS_E_INT_B', 'SIGNAL', 'V', ''],
                                          ['ENERGY', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY', 'NUMERIC', 'J', ''],
+                                         ['ENERGY_BAYES', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY_BAYES', 'NUMERIC', 'J', ''],
                                          ['ENERGY_PD', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY_PD', 'SIGNAL', 'V', 's'],
                                          ['VACUUM', 'ANALYSIS3::TOP.THOMSON.LASER:VACUUM', 'SIGNAL', 'V', 's'],
                                          ['TRIG_TIME', 'ANALYSIS3::TOP.THOMSON.LASER:TRIG_TIME', 'NUMERIC', 's', ''],
