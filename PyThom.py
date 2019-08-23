@@ -30,7 +30,12 @@ FORCE_NEW_NODES = 1
 photodiode_baseline_record_fraction = 0.15  # the fraction of the ruby photodiode record to take as the baseline
 num_vacuum_shots = 4
 FAST_GAIN = 1
-E_CHARGE = 1.60217662*10**(-19)  # [coulombs]
+E_CHARGE = 1.602176634*10**(-19)  # [coulombs]
+SIGMA_TS = 6.63404498777644e-29  # [m^2]
+h_PLANCK = 6.62607015e-34  # [J*s]
+ELECTRON_MASS = 9.1094*10**(-31)  # [kg]
+# K_BOLTZMANN = 8.653760519135803e-05  # [eV/K]
+K_BOLTZMANN = 1.3864852*10**(-23)  # [J/K]
 R_FEEDBACK = 50000  # feedback resistance, [ohms]
 style = 'Bayes'  # 'Bayes' for Bayesian analysis or 'Ratio' for ratio evaluation method
 sns.set()   # Set the plotting theme
@@ -73,9 +78,10 @@ def analyze_shot(shot_number):
     log_book = get_ts_logbook(verbose=1)
     analysis_tree = Tree('analysis3', shot_number, 'EDIT')
 
+    # TODO possibly remove next line
     # Get the photodiode energy trace
-    energy_photodiode_sig = get_data('ENERGY_PD', analysis_tree)
-    energy_photodiode_t = get_dim('ENERGY_PD', analysis_tree)
+    # energy_photodiode_sig = get_data('ENERGY_PD', analysis_tree)
+    # energy_photodiode_t = get_dim('ENERGY_PD', analysis_tree)
 
     # Get a list of the active polychromators by name
     regex = re.compile('POLY_._.')
@@ -91,6 +97,7 @@ def analyze_shot(shot_number):
 
 
 
+    poly_list = poly_list[3]
     # Analyze all active polychromator channels
     for poly_id in poly_list:
 
@@ -152,6 +159,36 @@ def analyze_shot(shot_number):
         var_stray = 4*(n_stray + n_background_stray)
         var_bg = 4*n_background
         var_scat = var_pe + var_stray
+
+        # Calculate the theoretical number of
+        var_energy = get_data('VAR_ENERGY', analysis_tree)
+
+        var_poly = var_stray
+
+
+    # Use pymc3 for Bayesian inference using the fixed Maxwellian model for the EVDF
+    with pm.Model() as model:
+        # Priors for unknown model parameters
+        # alpha = pm.Normal('alpha', mu=0, sigma=10)
+        # beta = pm.Normal('beta', mu=0, sigma=10, shape=2)
+        # sigma = pm.HalfNormal('sigma', sigma=1)
+        t_e = pm.Uniform('t_e', lower=0.025, upper=100)
+        n_e = pm.Uniform('n_e', lower=0, upper=10**22)
+        c_geom = pm.Uniform('c_geom', lower=0, upper=np.Inf)
+
+        # Expected value of outcome
+        # mu = alpha + beta[0]*X1 + beta[1]*X2
+
+        # n_model =
+
+
+
+        # Likelihood (sampling distribution) of observations
+        # Y_obs = pm.Normal('Y_obs', mu=mu, sigma=sigma, observed=Y)
+        likelihood = pm.Normal()
+
+
+
 
 
 
@@ -257,6 +294,7 @@ def build_shot(shot_number):
     try:
         laser_energy = get_data('ENERGY', analysis_tree)
         laser_energy_bayes = get_data('ENERGY_BAYES', analysis_tree)
+        laser_energy_var = get_data('ENERGY_VAR', analysis_tree)
     except Exception as ex:
         if ex.msgnam == 'NNF' or ex.msgnam == 'NODATA':
             energy_photodiode_sig = get_data('TS_RUBY', data_tree)
@@ -266,9 +304,11 @@ def build_shot(shot_number):
             integrated_photodiode = np.trapz(energy_photodiode_sig, energy_photodiode_t)
             laser_energy = (integrated_photodiode - laser_energy_calibration_int)/laser_energy_calibration_slope
             laser_energy_bayes = np.mean((integrated_photodiode - laser_energy_calibration_int_bayes)/laser_energy_calibration_slope_bayes)
+            laser_energy_var = np.var((integrated_photodiode - laser_energy_calibration_int_bayes)/laser_energy_calibration_slope_bayes)
             tree_write_safe(energy_photodiode_sig, 'ENERGY_PD', dim=energy_photodiode_t, tree=analysis_tree)
             tree_write_safe(laser_energy, 'ENERGY', tree=analysis_tree)
             tree_write_safe(laser_energy_bayes, 'ENERGY_BAYES', tree=analysis_tree)
+            tree_write_safe(laser_energy_var, 'ENERGY_VAR', tree=analysis_tree)
         else:
             print(ex)
 
@@ -1035,6 +1075,16 @@ def get_cal_string(shot_number, poly_id):
     return return_string
 
 
+def quantum_efficiency(l_meters):
+    # Avalanche Photodiode quantum efficiency as determined by Kiyong Lee
+    # EG&G model C30956E Si-APD detectors
+    # takes in lambda in [m]
+    # outputs QE in fraction of 1
+    l_meters = l_meters*10**9
+    Q = (-9.167*10**-5)*l_meters**2 + 0.23855*l_meters - 46.722
+    Q = Q/100
+
+
 def get_vacuum_shot_list(shot_number, log_book, number_vacuum_shots):
     """
     Finds nearest vacuum shots for a given Thomson shot.
@@ -1046,7 +1096,7 @@ def get_vacuum_shot_list(shot_number, log_book, number_vacuum_shots):
 
     Returns
     -------
-    vac_list: a list of vacuum shots 
+    vac_list: a list of vacuum shots
     """
     ts_today = np.int(str(shot_number)[0:6])
     ts_days = np.unique(np.array([np.int(shots[0:6]) for shots in log_book['Shot'].astype(str)]))
@@ -1515,11 +1565,11 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['LASER_E_INT_B', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.LAS_E_INT_B', 'SIGNAL', 'V', ''],
                                          ['ENERGY', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY', 'NUMERIC', 'J', ''],
                                          ['ENERGY_BAYES', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY_BAYES', 'NUMERIC', 'J', ''],
+                                         ['ENERGY_VAR', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY_BAYES', 'NUMERIC', 'J^2', ''],
                                          ['ENERGY_PD', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY_PD', 'SIGNAL', 'V', 's'],
                                          ['VACUUM', 'ANALYSIS3::TOP.THOMSON.LASER:VACUUM', 'SIGNAL', 'V', 's'],
                                          ['TRIG_TIME', 'ANALYSIS3::TOP.THOMSON.LASER:TRIG_TIME', 'NUMERIC', 's', ''],
-                                         ['FIRE_TIME', 'ANALYSIS3::TOP.THOMSON.LASER:FIRE_TIME', 'NUMERIC', 's', '']
-                                         ],
+                                         ['FIRE_TIME', 'ANALYSIS3::TOP.THOMSON.LASER:FIRE_TIME', 'NUMERIC', 's', '']],
                                          columns=['Tag', 'Path', 'Usage', 'Units', 'dim_Units'])
 
 
