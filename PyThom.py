@@ -1683,8 +1683,10 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
 
 
 def inference_button2():
-    N_in = [-31164.3, 3040.38, 1613.666, 460.4418, 219.852]
-    var_in = [3202870.7274, 17794.926, 8707.380, 4142.40, 2409.076]
+    N_in_real = np.array([-31164.3, 3040.38, 1613.666, 460.4418, 219.852])
+    # N_in_test = np.array([0, 5.30220575e-11, 2.32446419e-11, 3.03997827e-11, 1.06100367e-11])
+    N_in_test = N_in_real
+    var_in = np.array([3202870.7274, 17794.926, 8707.380, 4142.40, 2409.076])/1e5
     analysis_tree = Tree('analysis3', 190516030)
     energy_in = get_data('ENERGY_BAYES', analysis_tree)
 
@@ -1694,88 +1696,85 @@ def inference_button2():
     
     cal_str = 'CAL_5_CH_HG_POLY_3_T_'
     var_str = 'POLY_3_Q_VAR_SCAT'
-    
+
     for channel in np.arange(2,6):
         tau[channel] = get_data(cal_str + np.str(channel), analysis_tree)
         l[channel] = get_dim(cal_str + np.str(channel), analysis_tree)
         var.append(get_data(var_str.replace('Q', np.str(channel)), analysis_tree))
 
-    # start = theano.shared(l[0][0])
-    # stop = theano.shared(l[0][-1])
-
-    N_norm = N_in[1:]/np.max(N_in[1:])
+    N_in = N_in_test[1:]/N_in_test[1]
+    var_in = var_in[1:]
 
     # create our Op
-    logl = LogLikeWithGrad(my_loglike, N_norm, l[2], np.prod(np.sqrt(var_in)), tau)
+    logl = LogLikeWithGrad(my_loglike, N_in, l[2], np.sqrt(var_in), tau)
 
     # use PyMC3 to sampler from log-likelihood
     with pm.Model() as opmodel:
-        # uniform priors on m and c
-        # m = pm.Uniform('m', lower=-10., upper=10.)
-        # c = pm.Uniform('c', lower=-10., upper=10.)
 
         # Priors
         t_e = pm.Uniform('t_e', lower=0.025, upper=100)
-        n_e = pm.Uniform('n_e', lower=1e16, upper=1e24)
-        c_geom = pm.Uniform('c_geom', lower=0, upper=1e5)
+        # n_e = pm.Uniform('n_e', lower=1e15, upper=1e24)
+        # c_geom = pm.Uniform('c_geom', lower=0, upper=1e-10)
 
-        # constants
-        # poly_sigma = np.prod(1/(np.sqrt(2*np.pi*np.array(var))))
-    
         # convert parameters to a tensor vector
-        theta = tt.as_tensor_variable([t_e, n_e, c_geom])
-    
+        # theta = tt.as_tensor_variable([t_e, n_e, c_geom])
+        theta = tt.as_tensor_variable([t_e])
+
+        # Sampler
+
+        # step = pm.NUTS(target_accept=0.9)
+        # step = pm.NUTS(target_accept=0.5)
+        # step = pm.Metropolis()
+        # step = None
+
         # use a DensityDist
         pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
-        trace = pm.sample(10000, tune=2000, discard_tuned_samples=True)
-    
+        # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
+        trace = pm.sample(2000, tune=6000, discard_tuned_samples=True)
+
         # plot the traces
-        pm.summary(trace)
+        # pm.summary(trace)
 
         pmdf = pm.trace_to_dataframe(trace)
 
+        # pm.summary(trace)
 
-    # put the chains in an array (for later!)
-    # samples_pymc3_2 = np.vstack((trace['m'], trace['c'])).T
+        # sns.kdeplot(pmdf.t_e)
+
+        # samples_pymc3_2 = np.vstack((trace['t_e'])).T
+
+        return pmdf, trace
+
 
     
-    # pm.traceplot(trace)
-    # # plt.savefig('res.eps')
-    # print(pm.summary(trace))
-    
-# define your super-complicated model that uses loads of external codes
+# define the model
 def my_model(theta, tau, l):
-    """
-    A straight line!
 
-    Note:
-        This function could simply be:
-
-            m, c = theta
-            return m*l + l
-
-    """
-    t_e, n_e, c_geom = theta  # unpack line gradient and y-intercept
+    # t_e, n_e, c_geom = theta  # unpack parameters
+    t_e = theta  # unpack parameters
     # TODO replace pi/4 below:
     beta = C_SPEED*np.sqrt(ELECTRON_MASS)/(2*RUBY_WL*np.sin(np.pi/4)*np.sqrt(2*E_CHARGE))
     ret = list([])
     for ii in np.arange(2,6):
-        ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*n_e*c_geom*np.trapz(tau[ii]*np.exp(-beta**2*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
+        ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*np.trapz(tau[ii]*np.exp(-(beta**2)*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
 
-    # print(ret/np.max(ret))
-    return ret/np.max(ret)
+    # print(ret)
+    return np.array(ret/ret[0])
     # return n_e*c_geom*np.trapz(tau*np.exp(-beta**2*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l)
 
 
-# define your really-complicated likelihood function that uses loads of external codes
+# define the likelihood function
 def my_loglike(theta, l, data, sigma, tau):
     """
     A Gaussian log-likelihood function for a model with parameters given in theta
     """
-
+    data = np.array(data)
     model = my_model(theta, tau, l)
+    # model = np.flipud(model)
     # print(data)
-    return -(0.5/sigma**2)*np.sum((data - model)**2)
+    llh = -(0.5/(np.sqrt(2*np.pi)**len(data)*np.prod(np.sqrt(sigma**2))))*np.sum((data - model)**2/((sigma)**2))
+    # print(llh)
+    return llh
 
 
 class LogLikeWithGrad(tt.Op):
@@ -1858,7 +1857,7 @@ class LogLikeGrad(tt.Op):
         self.x = x
         self.sigma = sigma
         self.tau = tau
-
+        
     def perform(self, node, inputs, outputs):
         theta, = inputs
 
@@ -1868,6 +1867,10 @@ class LogLikeGrad(tt.Op):
 
         # calculate gradients
         # grads = gradients(theta, lnlike)
-        grads = approx_fprime(theta, lnlike, epsilon=1e-25)
+        grads = approx_fprime(theta, lnlike, epsilon=1e-9)
 
         outputs[0][0] = grads
+        
+        
+
+pmdf, trace = inference_button2()

@@ -6,6 +6,7 @@ import integration as inn
 import matplotlib.pyplot as plt
 
 
+
 y = [8/3,52/3,54,368/3]
 mean_error = np.zeros(len(y))
 C = [[0.1,0,0,0],[0.,0.1,0,0],[0.,0,0.1,0],[0.,0,0,0.1]] 

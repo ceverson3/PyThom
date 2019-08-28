@@ -18,8 +18,11 @@ var_in = [3202870.7274, 17794.926, 8707.380, 4142.40, 2409.076]
 analysis_tree = Tree('analysis3', 190516030)
 
 tau = {}
+l = {}
 
 for channel in np.arange(2,6):
+    tau[channel] = PyT
+    l = 
     pass
 
 xx = np.array([1.,2.,3.,4.])
