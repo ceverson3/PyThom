@@ -23,6 +23,10 @@ from MDSplus import Connection, Tree, Data
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
 import pymc3 as pm
+import theano
+import theano.tensor as tt
+import integrationz as inn
+from scipy.optimize import approx_fprime
 
 
 PLOTS_ON = 1
@@ -37,7 +41,9 @@ ELECTRON_MASS = 9.1094*10**(-31)  # [kg]
 # K_BOLTZMANN = 8.653760519135803e-05  # [eV/K]
 K_BOLTZMANN = 1.3864852*10**(-23)  # [J/K]
 R_FEEDBACK = 50000  # feedback resistance, [ohms]
-style = 'Bayes'  # 'Bayes' for Bayesian analysis or 'Ratio' for ratio evaluation method
+C_SPEED = 3e8  # [m/s]
+RUBY_WL = 694.3e-9  # [m]
+style = 'BDA'  # 'Bayes' for Bayesian analysis or 'Ratio' for ratio evaluation method
 sns.set()   # Set the plotting theme
 
 
@@ -85,7 +91,8 @@ def analyze_shot(shot_number):
 
     # Get a list of the active polychromators by name
     regex = re.compile('POLY_._.')
-    poly_list = [string for string in log_book.columns if re.match(regex, string) and log_book.loc[log_book.Shot == shot_number, string].array[0] != 0]
+    channel_list = [string for string in log_book.columns if re.match(regex, string) and log_book.loc[log_book.Shot == shot_number, string].array[0] != 0]
+    poly_list = np.unique([np.int(ch[-3]) for ch in channel_list])
 
     # TODO possibly remove next line
     # Get the geometric parameters for the measurements of shot_number
@@ -97,28 +104,27 @@ def analyze_shot(shot_number):
 
 
 
-    poly_list = poly_list[3]
     # Analyze all active polychromator channels
-    for poly_id in poly_list:
+    for channel_id in channel_list:
 
         # An integer to identify the polychromator number
-        poly_num = np.int(poly_id[5])
-        channel_num = np.int(poly_id[-1])
+        poly_num = np.int(channel_id[5])
+        channel_num = np.int(channel_id[-1])
 
         # Get the raw polychromator data:
-        raw_poly_channel_sig = get_data(poly_id + '_RAW', analysis_tree)
-        raw_poly_channel_t = get_dim(poly_id + '_RAW', analysis_tree)
+        raw_poly_channel_sig = get_data(channel_id + '_RAW', analysis_tree)
+        raw_poly_channel_t = get_dim(channel_id + '_RAW', analysis_tree)
 
         # Detrend and otherwise clean up the raw signals
         clean_poly_channel_sig = signal.savgol_filter(signal.detrend(raw_poly_channel_sig), 101, 3)
         clean_poly_channel_t = raw_poly_channel_t
         dt = np.mean(np.diff(raw_poly_channel_t))
-        tree_write_safe(clean_poly_channel_sig, poly_id + '_SIG', dim=clean_poly_channel_t, tree=analysis_tree)
+        tree_write_safe(clean_poly_channel_sig, channel_id + '_SIG', dim=clean_poly_channel_t, tree=analysis_tree)
 
         # Get the vacuum shot:
         # Average the closest previous/subsequent comparable vacuum shots with their energies scaled, checking first
         # and putting the vacuum shot in the tree if necessary
-        vacuum_avg = get_data(poly_id + '_VAC', analysis_tree)
+        vacuum_avg = get_data(channel_id + '_VAC', analysis_tree)
         vacuum_avg_clean = signal.savgol_filter(signal.detrend(vacuum_avg), 101, 3)
 
         # Find the signal voltage and the standard deviation signal voltage of the background
@@ -132,7 +138,7 @@ def analyze_shot(shot_number):
         background_voltage = np.std(np.r_[raw_poly_channel_sig[0:scattering_window_start[poly_num - 1] - 200], raw_poly_channel_sig[0:scattering_window_end[poly_num - 1] + 1000]])
 
         # Get the calibration string based on the shot number:
-        cal_string = get_cal_string(shot_number, poly_id)
+        cal_string = get_cal_string(shot_number, channel_id)
 
         # Use the signal voltage to find the number of photoelectrons n_pe
         capacitance = get_data(cal_string.replace('TYPE?', 'C'), analysis_tree)
@@ -154,38 +160,45 @@ def analyze_shot(shot_number):
         n_stray = stray_voltage*pulse_width_time/(amplifier_gain*E_CHARGE*FAST_GAIN*R_FEEDBACK*(1 - np.exp(-pulse_width_time/(R_FEEDBACK*capacitance))))
         n_background_stray = background_stray_voltage*n_stray/stray_voltage
 
+        n_scat = n_pe - n_stray
+        tree_write_safe(n_scat, channel_id + '_N_SCAT', tree=analysis_tree)
+
         # Calculate the variances of the measured data:
         var_pe = 4*(n_pe + n_background)
         var_stray = 4*(n_stray + n_background_stray)
         var_bg = 4*n_background
         var_scat = var_pe + var_stray
+        tree_write_safe(var_scat, channel_id + '_VAR_SCAT', tree=analysis_tree)
 
         # Calculate the theoretical number of
-        var_energy = get_data('VAR_ENERGY', analysis_tree)
+        var_energy = get_data('ENERGY_VAR', analysis_tree)
 
-        var_poly = var_stray
+        var_poly = var_scat
 
-
-    # Use pymc3 for Bayesian inference using the fixed Maxwellian model for the EVDF
-    with pm.Model() as model:
-        # Priors for unknown model parameters
-        # alpha = pm.Normal('alpha', mu=0, sigma=10)
-        # beta = pm.Normal('beta', mu=0, sigma=10, shape=2)
-        # sigma = pm.HalfNormal('sigma', sigma=1)
-        t_e = pm.Uniform('t_e', lower=0.025, upper=100)
-        n_e = pm.Uniform('n_e', lower=0, upper=10**22)
-        c_geom = pm.Uniform('c_geom', lower=0, upper=np.Inf)
-
-        # Expected value of outcome
-        # mu = alpha + beta[0]*X1 + beta[1]*X2
-
-        # n_model =
+    if style == 'REM':
+        pass
 
 
+    elif style == 'BDA':
 
-        # Likelihood (sampling distribution) of observations
-        # Y_obs = pm.Normal('Y_obs', mu=mu, sigma=sigma, observed=Y)
-        likelihood = pm.Normal()
+        # for poly in poly_list:
+            # channels = [1, 2, 3, 4, 5]
+            # n_i = np.array([get_data('POLY_' + np.str(poly) + '_' + c + '_N_SCAT', analysis_tree) for c in channels])
+            # sigma_i = np.array([get_data('POLY_' + np.str(poly) + '_' + c + '_VAR_SCAT', analysis_tree) for c in channels])
+            # trans_i =
+
+            # do_pymc3(n_i, sigma_i, )
+        pass
+
+
+
+
+    else:
+        print('Pick either style = BDA or REM')
+
+
+
+
 
 
 
@@ -337,7 +350,7 @@ def build_shot(shot_number):
 
     # Get a list of the active polychromators by name
     regex = re.compile('POLY_._.')
-    poly_list = [string for string in log_book.columns if re.match(regex, string) and log_book.loc[log_book.Shot == shot_number, string].array[0] != 0]
+    channel_list = [string for string in log_book.columns if re.match(regex, string) and log_book.loc[log_book.Shot == shot_number, string].array[0] != 0]
 
     # Get the geometric parameters for the measurements of shot_number
     geometry = get_spot_geometry(log_book.loc[log_book.Shot == shot_number, 'Mount_Positions'].array[0], log_book.loc[log_book.Shot == shot_number, 'Jack_Height'].array[0])
@@ -347,26 +360,26 @@ def build_shot(shot_number):
     log_book.to_csv(latest_filename, index=False)
 
     # Analyze all active polychromator channels
-    for poly_id in poly_list:
-        # print(str(shot_number) + ' ' + str(poly_id))
+    for channel_id in channel_list:
+        # print(str(shot_number) + ' ' + str(channel_id))
 
         # Put the geometry data for each polychromator in the analysis tree if it isn't already:
         for tag_name in geometry.columns.array[1:]:
-            data = geometry.loc[geometry.polychromator == int(poly_id.rsplit(sep='_')[-2]), tag_name].array[0]
-            tree_write_safe(data, poly_id[:-2] + '_' + tag_name, tree=analysis_tree)
+            data = geometry.loc[geometry.polychromator == int(channel_id.rsplit(sep='_')[-2]), tag_name].array[0]
+            tree_write_safe(data, channel_id[:-2] + '_' + tag_name, tree=analysis_tree)
 
         # Put the raw polychromator data in the analysis tree if it isn't already:
         try:
-            raw_poly_channel_sig = get_data(poly_id + '_RAW', analysis_tree)
+            raw_poly_channel_sig = get_data(channel_id + '_RAW', analysis_tree)
         except Exception as ex:
-            raw_poly_channel_sig = get_data('TS_POLY' + poly_id[-3:], data_tree)
-            raw_poly_channel_t = get_dim('TS_POLY' + poly_id[-3:], data_tree)
-            tree_write_safe(raw_poly_channel_sig, poly_id + '_RAW', dim=raw_poly_channel_t, tree=analysis_tree)
+            raw_poly_channel_sig = get_data('TS_POLY' + channel_id[-3:], data_tree)
+            raw_poly_channel_t = get_dim('TS_POLY' + channel_id[-3:], data_tree)
+            tree_write_safe(raw_poly_channel_sig, channel_id + '_RAW', dim=raw_poly_channel_t, tree=analysis_tree)
 
         # Set up a vacuum shot if this is a plasma shot:
         if log_book.loc[log_book.Shot == shot_number, 'Fuel'].array[0] != 'V' and log_book.loc[log_book.Shot == shot_number, 'Fuel'].array[0] != '-':
             try:
-                poly_channel_vacuum_avg = get_data(poly_id + '_VAC', analysis_tree)
+                poly_channel_vacuum_avg = get_data(channel_id + '_VAC', analysis_tree)
             except Exception as ex:
                 vacuum_sig = {}
                 vacuum_t = {}
@@ -374,17 +387,17 @@ def build_shot(shot_number):
                 for vac_shot in vacuum_shot_list:
                     try:
                         vac_tree = Tree('analysis3', vac_shot)
-                        vacuum_sig[ctr] = get_data(poly_id + '_RAW', vac_tree)
-                        vacuum_t[ctr] = get_dim(poly_id + '_RAW', vac_tree)
+                        vacuum_sig[ctr] = get_data(channel_id + '_RAW', vac_tree)
+                        vacuum_t[ctr] = get_dim(channel_id + '_RAW', vac_tree)
                         vac_energy = get_data('ENERGY', vac_tree)
                     except Exception as ex:
                         vac_tree.close()
                         build_shot(vac_shot)
                         log_book = get_ts_logbook()
-                        # print(str(vac_shot) + ' ' + poly_id + '_RAW')
+                        # print(str(vac_shot) + ' ' + channel_id + '_RAW')
                         vac_tree = Tree('analysis3', vac_shot)
-                        vacuum_sig[ctr] = get_data(poly_id + '_RAW', vac_tree)
-                        vacuum_t[ctr] = get_dim(poly_id + '_RAW', vac_tree)
+                        vacuum_sig[ctr] = get_data(channel_id + '_RAW', vac_tree)
+                        vacuum_t[ctr] = get_dim(channel_id + '_RAW', vac_tree)
                         vac_energy = get_data('ENERGY', vac_tree)
 
                     vac_tree.close()
@@ -394,7 +407,7 @@ def build_shot(shot_number):
                     ctr = ctr + 1
 
                 poly_channel_vacuum_avg = signal.savgol_filter(signal.detrend(np.array([trace*laser_energy for trace in vacuum_sig.values()]).mean(axis=0)), 101, 3)
-                tree_write_safe(poly_channel_vacuum_avg, poly_id + '_VAC', dim=vacuum_t[0], tree=analysis_tree)
+                tree_write_safe(poly_channel_vacuum_avg, channel_id + '_VAC', dim=vacuum_t[0], tree=analysis_tree)
 
     # Load the data, analysis, and model trees
     data_tree.close()
@@ -1057,10 +1070,10 @@ def get_dim(tag_name, tree):
     return t
 
 
-def get_cal_string(shot_number, poly_id):
+def get_cal_string(shot_number, channel_id):
     # An integer to identify the polychromator number
-    poly_num = np.int(poly_id[5])
-    channel_num = np.int(poly_id[-1])
+    poly_num = np.int(channel_id[5])
+    channel_num = np.int(channel_id[-1])
     return_string = 'CAL_'
     if shot_number < 181008002:
         return_string = return_string + '3_CH_POLY_' + str(poly_num) + '_TYPE?_' + str(channel_num)
@@ -1083,6 +1096,8 @@ def quantum_efficiency(l_meters):
     l_meters = l_meters*10**9
     Q = (-9.167*10**-5)*l_meters**2 + 0.23855*l_meters - 46.722
     Q = Q/100
+
+    return Q
 
 
 def get_vacuum_shot_list(shot_number, log_book, number_vacuum_shots):
@@ -1565,7 +1580,7 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['LASER_E_INT_B', 'ANALYSIS3::TOP.THOMSON.CALIBRATIONS.LAS_E_INT_B', 'SIGNAL', 'V', ''],
                                          ['ENERGY', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY', 'NUMERIC', 'J', ''],
                                          ['ENERGY_BAYES', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY_BAYES', 'NUMERIC', 'J', ''],
-                                         ['ENERGY_VAR', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY_BAYES', 'NUMERIC', 'J^2', ''],
+                                         ['ENERGY_VAR', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY_VAR', 'NUMERIC', 'J^2', ''],
                                          ['ENERGY_PD', 'ANALYSIS3::TOP.THOMSON.LASER:ENERGY_PD', 'SIGNAL', 'V', 's'],
                                          ['VACUUM', 'ANALYSIS3::TOP.THOMSON.LASER:VACUUM', 'SIGNAL', 'V', 's'],
                                          ['TRIG_TIME', 'ANALYSIS3::TOP.THOMSON.LASER:TRIG_TIME', 'NUMERIC', 's', ''],
@@ -1573,9 +1588,286 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          columns=['Tag', 'Path', 'Usage', 'Units', 'dim_Units'])
 
 
+# def inference_button():
+#     N_in = [-31164.3, 3040.38, 1613.666, 460.4418, 219.852]
+#     var_in = [3202870.7274, 17794.926, 8707.380, 4142.40, 2409.076]
+#     analysis_tree = Tree('analysis3', 190516030)
+#     energy_in = get_data('ENERGY_BAYES', analysis_tree)
+
+#     tau = {}
+#     l = {}
+#     var = list([])
+    
+#     cal_str = 'CAL_5_CH_HG_POLY_3_T_'
+#     var_str = 'POLY_3_Q_VAR_SCAT'
+    
+#     for channel in np.arange(2,6):
+#         tau[channel] = get_data(cal_str + np.str(channel), analysis_tree)
+#         l[channel] = get_dim(cal_str + np.str(channel), analysis_tree)
+#         var.append(get_data(var_str.replace('Q', np.str(channel))))
+    
+#     start = theano.shared(l[0][0])
+#     stop = theano.shared(l[0][-1])
+    
+#     with pm.Model() as basic_model:
+#         # a = pm.Uniform('a', 3., 8.)
+#         # b = pm.Uniform('b', 0., 3.)
+
+#         # Priors
+#         t_e = pm.Uniform('t_e', lower=0.025, upper=100)
+#         n_e = pm.Uniform('n_e', lower=0, upper=10**22)
+#         c_geom = pm.Uniform('c_geom', lower=1e-6, upper=np.Inf)
+
+#         # constants
+#         poly_sigma = np.prod(1/(np.sqrt(2*np.pi*np.array(var))))
+
+#         # Initializing theano variables with guess values?
+#         l = tt.dscalar('l')
+#         l.tag.test_value = np.ones(())*start
+
+
+#         # alpha_ = tt.dscalar('alpha_')
+#         # alpha_.tag.test_value = np.ones(())*(SIGMA_TS*energy_in*np.sqrt(ELECTRON_MASS/(2*np.pi))/h_PLANCK)
+
+#         # n_e_ = tt.dscalar('n_e_')
+#         # n_e_.tag.test_value = np.ones(())*2e19
+
+#         t_e_ = tt.dscalar('t_e_')
+#         t_e_.tag.test_value = np.ones(())*10
+
+#         # c_geom_ = tt.dscalar('c_geom_')
+#         # c_geom_.tag.test_value = np.ones(())
+
+#         func =
+
+#         integrate = inn.Integrate(func,l)
+#         mu_model = alpha_integrate(start,stop[-4],a,b)
+    
+#         N_obs = pm.Normal('N_obs', mu=mu_model)
+
+#         #step = pm.Metropolis()
+#         step = None
+#         #step=pm.SMC()
+#         #step=pm.HamiltonianMC()
+    
+#         y = pm.Normal('y', mu=mu, sd=0.1, observed=y_obs)
+#         trace = pm.sample(2000, tune=1500, step=step)
+
+
+    # with pm.Model() as linear_model:
+    #     # Intercept
+    #     intercept = pm.Normal('intercept', mu=0, sd=5)
+    #     # intercept = pm.Uniform('intercept',lower=0, upper=1)
+
+    #     # Slope
+    #     # slope = pm.Normal('slope', mu=0, sd=10)
+    #     slope = pm.Uniform('slope',lower=0, upper=1)
+
+    #     # Standard deviation
+    #     sigma = pm.HalfNormal('sigma', sd=10)
+
+    #     # Estimate of mean
+    #     mean = intercept + slope*energy_measured
+
+    #     # Observed values
+    #     Y_obs = pm.Normal('Y_obs', mu=mean, sd=sigma, observed=energy_integrated)
+
+    #     # Sampler
+    #     step = pm.NUTS(target_accept=0.95)
+
+    #     # Posterior distribution
+    #     linear_trace = pm.sample(2000, step, tune=4000)
+    #     # linear_trace = pm.sample(1000, step, tune=2000)
+    #     pm.summary(linear_trace)
 
 
 
+def inference_button2():
+    N_in = [-31164.3, 3040.38, 1613.666, 460.4418, 219.852]
+    var_in = [3202870.7274, 17794.926, 8707.380, 4142.40, 2409.076]
+    analysis_tree = Tree('analysis3', 190516030)
+    energy_in = get_data('ENERGY_BAYES', analysis_tree)
+
+    tau = {}
+    l = {}
+    var = list([])
+    
+    cal_str = 'CAL_5_CH_HG_POLY_3_T_'
+    var_str = 'POLY_3_Q_VAR_SCAT'
+    
+    for channel in np.arange(2,6):
+        tau[channel] = get_data(cal_str + np.str(channel), analysis_tree)
+        l[channel] = get_dim(cal_str + np.str(channel), analysis_tree)
+        var.append(get_data(var_str.replace('Q', np.str(channel)), analysis_tree))
+
+    # start = theano.shared(l[0][0])
+    # stop = theano.shared(l[0][-1])
+
+    N_norm = N_in[1:]/np.max(N_in[1:])
+
+    # create our Op
+    logl = LogLikeWithGrad(my_loglike, N_norm, l[2], np.prod(np.sqrt(var_in)), tau)
+
+    # use PyMC3 to sampler from log-likelihood
+    with pm.Model() as opmodel:
+        # uniform priors on m and c
+        # m = pm.Uniform('m', lower=-10., upper=10.)
+        # c = pm.Uniform('c', lower=-10., upper=10.)
+
+        # Priors
+        t_e = pm.Uniform('t_e', lower=0.025, upper=100)
+        n_e = pm.Uniform('n_e', lower=1e16, upper=1e24)
+        c_geom = pm.Uniform('c_geom', lower=0, upper=1e5)
+
+        # constants
+        # poly_sigma = np.prod(1/(np.sqrt(2*np.pi*np.array(var))))
+    
+        # convert parameters to a tensor vector
+        theta = tt.as_tensor_variable([t_e, n_e, c_geom])
+    
+        # use a DensityDist
+        pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
+        trace = pm.sample(10000, tune=2000, discard_tuned_samples=True)
+    
+        # plot the traces
+        pm.summary(trace)
+
+        pmdf = pm.trace_to_dataframe(trace)
 
 
+    # put the chains in an array (for later!)
+    # samples_pymc3_2 = np.vstack((trace['m'], trace['c'])).T
 
+    
+    # pm.traceplot(trace)
+    # # plt.savefig('res.eps')
+    # print(pm.summary(trace))
+    
+# define your super-complicated model that uses loads of external codes
+def my_model(theta, tau, l):
+    """
+    A straight line!
+
+    Note:
+        This function could simply be:
+
+            m, c = theta
+            return m*l + l
+
+    """
+    t_e, n_e, c_geom = theta  # unpack line gradient and y-intercept
+    # TODO replace pi/4 below:
+    beta = C_SPEED*np.sqrt(ELECTRON_MASS)/(2*RUBY_WL*np.sin(np.pi/4)*np.sqrt(2*E_CHARGE))
+    ret = list([])
+    for ii in np.arange(2,6):
+        ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*n_e*c_geom*np.trapz(tau[ii]*np.exp(-beta**2*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
+
+    # print(ret/np.max(ret))
+    return ret/np.max(ret)
+    # return n_e*c_geom*np.trapz(tau*np.exp(-beta**2*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l)
+
+
+# define your really-complicated likelihood function that uses loads of external codes
+def my_loglike(theta, l, data, sigma, tau):
+    """
+    A Gaussian log-likelihood function for a model with parameters given in theta
+    """
+
+    model = my_model(theta, tau, l)
+    # print(data)
+    return -(0.5/sigma**2)*np.sum((data - model)**2)
+
+
+class LogLikeWithGrad(tt.Op):
+
+    itypes = [tt.dvector] # expects a vector of parameter values when called
+    otypes = [tt.dscalar] # outputs a single scalar value (the log likelihood)
+
+    def __init__(self, loglike, data, x, sigma, tau):
+        """
+        Initialise with various things that the function requires. Below
+        are the things that are needed in this particular example.
+
+        Parameters
+        ----------
+        loglike:
+            The log-likelihood (or whatever) function we've defined
+        data:
+            The "observed" data that our log-likelihood function takes in
+        x:
+            The dependent variable (aka 'x') that our model requires
+        sigma:
+            The noise standard deviation that out function requires.
+        """
+
+        # add inputs as class attributes
+        self.likelihood = loglike
+        self.data = data
+        self.x = x
+        self.sigma = sigma
+        self.tau = tau
+
+        # initialise the gradient Op (below)
+        self.logpgrad = LogLikeGrad(self.likelihood, self.data, self.x, self.sigma, self.tau)
+
+    def perform(self, node, inputs, outputs):
+        # the method that is used when calling the Op
+        theta, = inputs  # this will contain my variables
+
+        # call the log-likelihood function
+        logl = self.likelihood(theta, self.x, self.data, self.sigma, self.tau)
+
+        outputs[0][0] = np.array(logl) # output the log-likelihood
+
+    def grad(self, inputs, g):
+        # the method that calculates the gradients - it actually returns the
+        # vector-Jacobian product - g[0] is a vector of parameter values
+        theta, = inputs  # our parameters
+        return [g[0]*self.logpgrad(theta)]
+
+
+class LogLikeGrad(tt.Op):
+
+    """
+    This Op will be called with a vector of values and also return a vector of
+    values - the gradients in each dimension.
+    """
+    itypes = [tt.dvector]
+    otypes = [tt.dvector]
+
+    def __init__(self, loglike, data, x, sigma, tau):
+        """
+        Initialise with various things that the function requires. Below
+        are the things that are needed in this particular example.
+
+        Parameters
+        ----------
+        loglike:
+            The log-likelihood (or whatever) function we've defined
+        data:
+            The "observed" data that our log-likelihood function takes in
+        x:
+            The dependent variable (aka 'x') that our model requires
+        sigma:
+            The noise standard deviation that out function requires.
+        """
+
+        # add inputs as class attributes
+        self.likelihood = loglike
+        self.data = data
+        self.x = x
+        self.sigma = sigma
+        self.tau = tau
+
+    def perform(self, node, inputs, outputs):
+        theta, = inputs
+
+        # define version of likelihood function to pass to derivative function
+        def lnlike(values):
+            return self.likelihood(values, self.x, self.data, self.sigma, self.tau)
+
+        # calculate gradients
+        # grads = gradients(theta, lnlike)
+        grads = approx_fprime(theta, lnlike, epsilon=1e-25)
+
+        outputs[0][0] = grads
