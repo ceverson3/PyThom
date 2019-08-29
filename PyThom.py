@@ -25,12 +25,11 @@ from sklearn.metrics import mean_squared_error, r2_score
 import pymc3 as pm
 import theano
 import theano.tensor as tt
-import integrationz as inn
 from scipy.optimize import approx_fprime
 
 
 PLOTS_ON = 1
-FORCE_NEW_NODES = 1
+FORCE_NEW_NODES = 0
 photodiode_baseline_record_fraction = 0.15  # the fraction of the ruby photodiode record to take as the baseline
 num_vacuum_shots = 4
 FAST_GAIN = 1
@@ -178,19 +177,20 @@ def analyze_shot(shot_number):
     if style == 'REM':
         pass
 
-
     elif style == 'BDA':
 
-        # for poly in poly_list:
-            # channels = [1, 2, 3, 4, 5]
-            # n_i = np.array([get_data('POLY_' + np.str(poly) + '_' + c + '_N_SCAT', analysis_tree) for c in channels])
-            # sigma_i = np.array([get_data('POLY_' + np.str(poly) + '_' + c + '_VAR_SCAT', analysis_tree) for c in channels])
-            # trans_i =
+        pmdf_fixed = {}
+        trace_fixed = {}
+        pmdf_drift = {}
+        trace_drift = {}
 
-            # do_pymc3(n_i, sigma_i, )
-        pass
-
-
+        for poly in poly_list:
+            if poly == 2:
+                continue
+            else:
+                poly_id = 'POLY_' + np.str(poly)
+                pmdf_fixed[poly], trace_fixed[poly] = inference_button_fixed(poly_id, analysis_tree)
+                pmdf_drift[poly], trace_drift[poly] = inference_button_drift(poly_id, analysis_tree)
 
 
     else:
@@ -317,7 +317,7 @@ def build_shot(shot_number):
             integrated_photodiode = np.trapz(energy_photodiode_sig, energy_photodiode_t)
             laser_energy = (integrated_photodiode - laser_energy_calibration_int)/laser_energy_calibration_slope
             laser_energy_bayes = np.mean((integrated_photodiode - laser_energy_calibration_int_bayes)/laser_energy_calibration_slope_bayes)
-            laser_energy_var = np.var((integrated_photodiode - laser_energy_calibration_int_bayes)/laser_energy_calibration_slope_bayes)
+            laser_energy_var = np.var((integrated_photodiode - laser_energy_calibration_int_bayes)/laser_energy_calibration_slope_bayes)/laser_energy_bayes**2
             tree_write_safe(energy_photodiode_sig, 'ENERGY_PD', dim=energy_photodiode_t, tree=analysis_tree)
             tree_write_safe(laser_energy, 'ENERGY', tree=analysis_tree)
             tree_write_safe(laser_energy_bayes, 'ENERGY_BAYES', tree=analysis_tree)
@@ -1588,133 +1588,65 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          columns=['Tag', 'Path', 'Usage', 'Units', 'dim_Units'])
 
 
-# def inference_button():
-#     N_in = [-31164.3, 3040.38, 1613.666, 460.4418, 219.852]
-#     var_in = [3202870.7274, 17794.926, 8707.380, 4142.40, 2409.076]
-#     analysis_tree = Tree('analysis3', 190516030)
-#     energy_in = get_data('ENERGY_BAYES', analysis_tree)
-
-#     tau = {}
-#     l = {}
-#     var = list([])
+def inference_button_fixed(poly_id, tree):
+    """
+    Perform the Bayesian analysis using the fixed Maxwellian distribution
     
-#     cal_str = 'CAL_5_CH_HG_POLY_3_T_'
-#     var_str = 'POLY_3_Q_VAR_SCAT'
+    Parameters
+    -----------
+    poly_id: something like "POLY_3" to identify which polychromator we're analyzing
+    tree: the active analysis tree
     
-#     for channel in np.arange(2,6):
-#         tau[channel] = get_data(cal_str + np.str(channel), analysis_tree)
-#         l[channel] = get_dim(cal_str + np.str(channel), analysis_tree)
-#         var.append(get_data(var_str.replace('Q', np.str(channel))))
     
-#     start = theano.shared(l[0][0])
-#     stop = theano.shared(l[0][-1])
-    
-#     with pm.Model() as basic_model:
-#         # a = pm.Uniform('a', 3., 8.)
-#         # b = pm.Uniform('b', 0., 3.)
-
-#         # Priors
-#         t_e = pm.Uniform('t_e', lower=0.025, upper=100)
-#         n_e = pm.Uniform('n_e', lower=0, upper=10**22)
-#         c_geom = pm.Uniform('c_geom', lower=1e-6, upper=np.Inf)
-
-#         # constants
-#         poly_sigma = np.prod(1/(np.sqrt(2*np.pi*np.array(var))))
-
-#         # Initializing theano variables with guess values?
-#         l = tt.dscalar('l')
-#         l.tag.test_value = np.ones(())*start
-
-
-#         # alpha_ = tt.dscalar('alpha_')
-#         # alpha_.tag.test_value = np.ones(())*(SIGMA_TS*energy_in*np.sqrt(ELECTRON_MASS/(2*np.pi))/h_PLANCK)
-
-#         # n_e_ = tt.dscalar('n_e_')
-#         # n_e_.tag.test_value = np.ones(())*2e19
-
-#         t_e_ = tt.dscalar('t_e_')
-#         t_e_.tag.test_value = np.ones(())*10
-
-#         # c_geom_ = tt.dscalar('c_geom_')
-#         # c_geom_.tag.test_value = np.ones(())
-
-#         func =
-
-#         integrate = inn.Integrate(func,l)
-#         mu_model = alpha_integrate(start,stop[-4],a,b)
-    
-#         N_obs = pm.Normal('N_obs', mu=mu_model)
-
-#         #step = pm.Metropolis()
-#         step = None
-#         #step=pm.SMC()
-#         #step=pm.HamiltonianMC()
-    
-#         y = pm.Normal('y', mu=mu, sd=0.1, observed=y_obs)
-#         trace = pm.sample(2000, tune=1500, step=step)
-
-
-    # with pm.Model() as linear_model:
-    #     # Intercept
-    #     intercept = pm.Normal('intercept', mu=0, sd=5)
-    #     # intercept = pm.Uniform('intercept',lower=0, upper=1)
-
-    #     # Slope
-    #     # slope = pm.Normal('slope', mu=0, sd=10)
-    #     slope = pm.Uniform('slope',lower=0, upper=1)
-
-    #     # Standard deviation
-    #     sigma = pm.HalfNormal('sigma', sd=10)
-
-    #     # Estimate of mean
-    #     mean = intercept + slope*energy_measured
-
-    #     # Observed values
-    #     Y_obs = pm.Normal('Y_obs', mu=mean, sd=sigma, observed=energy_integrated)
-
-    #     # Sampler
-    #     step = pm.NUTS(target_accept=0.95)
-
-    #     # Posterior distribution
-    #     linear_trace = pm.sample(2000, step, tune=4000)
-    #     # linear_trace = pm.sample(1000, step, tune=2000)
-    #     pm.summary(linear_trace)
-
-
-
-def inference_button2():
-    N_in_real = np.array([-31164.3, 3040.38, 1613.666, 460.4418, 219.852])
+    Returns
+    -------
+    pmdf, trace: the posterior trace as a dataframe, and the trace itself (which ArViz has trouble with for some reason)
+    """
+    # For testing:
+    # N_in_real = np.array([-31164.3, 3040.38, 1613.666, 460.4418, 219.852])
     # N_in_test = np.array([0, 5.30220575e-11, 2.32446419e-11, 3.03997827e-11, 1.06100367e-11])
-    N_in_test = N_in_real
-    var_in = np.array([3202870.7274, 17794.926, 8707.380, 4142.40, 2409.076])/1e5
-    analysis_tree = Tree('analysis3', 190516030)
+    # N_in_test = N_in_real
+    # var_in = np.array([3202870.7274, 17794.926, 8707.380, 4142.40, 2409.076])
+
+    analysis_tree = tree
+
     energy_in = get_data('ENERGY_BAYES', analysis_tree)
 
     tau = {}
-    l = {}
-    var = list([])
-    
-    cal_str = 'CAL_5_CH_HG_POLY_3_T_'
-    var_str = 'POLY_3_Q_VAR_SCAT'
+    l_domain = {}
+    var_spec = {}
+    var_scat = list([])
+    N_scat = list([])
 
-    for channel in np.arange(2,6):
-        tau[channel] = get_data(cal_str + np.str(channel), analysis_tree)
-        l[channel] = get_dim(cal_str + np.str(channel), analysis_tree)
-        var.append(get_data(var_str.replace('Q', np.str(channel)), analysis_tree))
+    node = analysis_tree.getNode('THOMSON.MEASUREMENTS.' + poly_id + '.N_SCAT')
 
-    N_in = N_in_test[1:]/N_in_test[1]
-    var_in = var_in[1:]
+    channels = np.arange(2, node.getNumDescendants() + 1)
+    var_str = poly_id + '_Q_VAR_SCAT'
+    for channel in channels:
+        cal_str = get_cal_string(analysis_tree.shot, poly_id + '_' + np.str(channel))
+
+        var_spec[channel] = get_data(cal_str.replace('TYPE?', 'V'), analysis_tree)
+        l_domain[channel] = get_dim(cal_str.replace('TYPE?', 'T'), analysis_tree)
+        tau[channel] = quantum_efficiency(l_domain[channel])*get_data(cal_str.replace('TYPE?', 'T'), analysis_tree)
+        var_scat.append(get_data(var_str.replace('Q', np.str(channel)), analysis_tree))
+        N_scat.append(get_data(poly_id + '_' + np.str(channel) + '_N_SCAT', analysis_tree))
+
+    var_in = np.array(var_scat)
+    N_in = np.array(N_scat)
+
+    N = N_in/N_in[0]
+    var = var_in/(N_in[0]**2)
 
     # create our Op
-    logl = LogLikeWithGrad(my_loglike, N_in, l[2], np.sqrt(var_in), tau)
+    logl = LogLikeWithGrad(fixed_maxwellian_loglike, N, l_domain[2], np.sqrt(var), tau)
 
     # use PyMC3 to sampler from log-likelihood
     with pm.Model() as opmodel:
 
         # Priors
-        t_e = pm.Uniform('t_e', lower=0.025, upper=100)
-        # n_e = pm.Uniform('n_e', lower=1e15, upper=1e24)
-        # c_geom = pm.Uniform('c_geom', lower=0, upper=1e-10)
+        t_e = pm.Uniform('t_e', lower=1, upper=100)
+        # n_e = pm.Uniform('n_e', lower=1e16, upper=1e23)
+        # c_geom = pm.Uniform('c_geom', lower=0, upper=10)
 
         # convert parameters to a tensor vector
         # theta = tt.as_tensor_variable([t_e, n_e, c_geom])
@@ -1730,7 +1662,103 @@ def inference_button2():
         # use a DensityDist
         pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
         # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
-        trace = pm.sample(2000, tune=6000, discard_tuned_samples=True)
+        trace = pm.sample(3000, tune=6000, discard_tuned_samples=True)
+
+        # plot the traces
+        # pm.summary(trace)
+
+        pmdf = pm.trace_to_dataframe(trace)
+
+        # pm.summary(trace)
+
+        # samples_pymc3_2 = np.vstack((trace['t_e'])).T
+
+
+        # plt.plot(np.arange(1,len(trace['t_e'])+1),trace['t_e'])
+        # plt.figure()
+        # sns.kdeplot(trace.t_e)
+
+        return pmdf, trace
+
+
+def inference_button_drift(poly_id, tree):
+    """
+    Perform the Bayesian analysis using the drifting Maxwellian distribution
+
+    Parameters
+    -----------
+    poly_id: something like "POLY_3" to identify which polychromator we're analyzing
+    tree: the active analysis tree
+
+    Returns
+    -------
+    pmdf, trace: the posterior trace as a dataframe, and the trace itself (which ArViz has trouble with for some reason)
+    """
+    # For testing:
+    # N_in_real = np.array([-31164.3, 3040.38, 1613.666, 460.4418, 219.852])
+    # N_in_test = np.array([0, 5.30220575e-11, 2.32446419e-11, 3.03997827e-11, 1.06100367e-11])
+    # N_in_test = N_in_real
+    # var_in = np.array([3202870.7274, 17794.926, 8707.380, 4142.40, 2409.076])
+
+    analysis_tree = tree
+
+    energy_in = get_data('ENERGY_BAYES', analysis_tree)
+
+    tau = {}
+    l_domain = {}
+    var_spec = {}
+    var_scat = list([])
+    N_scat = list([])
+
+    node = analysis_tree.getNode('THOMSON.MEASUREMENTS.' + poly_id + '.N_SCAT')
+
+    channels = np.arange(2, node.getNumDescendants() + 1)
+    var_str = poly_id + '_Q_VAR_SCAT'
+    for channel in channels:
+        cal_str = get_cal_string(analysis_tree.shot, poly_id + '_' + np.str(channel))
+
+        var_spec[channel] = get_data(cal_str.replace('TYPE?', 'V'), analysis_tree)
+        l_domain[channel] = get_dim(cal_str.replace('TYPE?', 'T'), analysis_tree)
+        tau[channel] = quantum_efficiency(l_domain[channel])*get_data(cal_str.replace('TYPE?', 'T'), analysis_tree)
+        var_scat.append(get_data(var_str.replace('Q', np.str(channel)), analysis_tree))
+        N_scat.append(get_data(poly_id + '_' + np.str(channel) + '_N_SCAT', analysis_tree))
+
+
+    var_in = np.array(var_scat)
+    N_in = np.array(N_scat)
+
+    N = N_in/N_in[0]
+    var = var_in/(N_in[0]**2)
+
+
+
+    # create our Op
+    logl = LogLikeWithGrad(drift_maxwellian_loglike, N, l_domain[2], np.sqrt(var), tau)
+
+    # use PyMC3 to sampler from log-likelihood
+    with pm.Model() as opmodel:
+
+        # Priors
+        t_e = pm.Uniform('t_e', lower=1, upper=100)
+        v_d = pm.Uniform('v_d', lower=-5e5, upper=5e5)
+        # n_e = pm.Uniform('n_e', lower=1e16, upper=1e23)
+        # c_geom = pm.Uniform('c_geom', lower=0, upper=10)
+
+        # convert parameters to a tensor vector
+        # theta = tt.as_tensor_variable([t_e, n_e, c_geom])
+        theta = tt.as_tensor_variable([t_e, v_d])
+
+        # Sampler
+
+        step = pm.NUTS(target_accept=0.9)
+        # step = pm.NUTS(target_accept=0.5)
+        # step = pm.Metropolis()
+        # step = None
+
+        # use a DensityDist
+        pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
+        # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
+        trace = pm.sample(2000, tune=8000, discard_tuned_samples=True)
 
         # plot the traces
         # pm.summary(trace)
@@ -1742,13 +1770,20 @@ def inference_button2():
         # sns.kdeplot(pmdf.t_e)
 
         # samples_pymc3_2 = np.vstack((trace['t_e'])).T
+        plt.plot(np.arange(1,len(trace['t_e'])+1),trace['t_e'])
+        plt.figure()
+        sns.kdeplot(trace.t_e)
+        plt.figure()
+        plt.plot(np.arange(1,len(trace['v_d'])+1),trace['v_d'])
+        plt.figure()
+        sns.kdeplot(trace.v_d)
 
         return pmdf, trace
 
 
     
 # define the model
-def my_model(theta, tau, l):
+def fixed_maxwellian(theta, tau, l_domain):
 
     # t_e, n_e, c_geom = theta  # unpack parameters
     t_e = theta  # unpack parameters
@@ -1756,23 +1791,52 @@ def my_model(theta, tau, l):
     beta = C_SPEED*np.sqrt(ELECTRON_MASS)/(2*RUBY_WL*np.sin(np.pi/4)*np.sqrt(2*E_CHARGE))
     ret = list([])
     for ii in np.arange(2,6):
-        ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*np.trapz(tau[ii]*np.exp(-(beta**2)*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
+        # ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*1e19*1e-5*np.trapz(tau[ii]*np.exp(-(beta**2)*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
+        ret.append(np.trapz(tau[ii]*np.exp(-(beta**2)*(l_domain - RUBY_WL)**2/t_e)/np.sqrt(t_e), l_domain))
 
-    # print(ret)
     return np.array(ret/ret[0])
-    # return n_e*c_geom*np.trapz(tau*np.exp(-beta**2*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l)
 
 
 # define the likelihood function
-def my_loglike(theta, l, data, sigma, tau):
+def fixed_maxwellian_loglike(theta, l_domain, data, sigma, tau):
     """
     A Gaussian log-likelihood function for a model with parameters given in theta
     """
     data = np.array(data)
-    model = my_model(theta, tau, l)
+    model = fixed_maxwellian(theta, tau, l_domain)
     # model = np.flipud(model)
     # print(data)
-    llh = -(0.5/(np.sqrt(2*np.pi)**len(data)*np.prod(np.sqrt(sigma**2))))*np.sum((data - model)**2/((sigma)**2))
+    llh = -0.5*np.log((1/(np.sqrt(2*np.pi)**len(sigma)*np.prod(np.sqrt(sigma**2)))))*np.sum((data - model)**2/((sigma)**2))
+    # print(llh)
+    return llh
+
+
+# define the model
+def drift_maxwellian(theta, tau, l_domain):
+
+    # t_e, n_e, c_geom = theta  # unpack parameters
+    t_e, v_d = theta  # unpack parameters
+    # TODO replace pi/4 below:
+    dl = np.mean(np.diff(l_domain))
+    beta = C_SPEED*np.sqrt(ELECTRON_MASS)/(2*RUBY_WL*np.sin(np.pi/4)*np.sqrt(2*E_CHARGE))
+    ret = list([])
+    for ii in np.arange(2,6):
+        # ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*1e19*1e-5*np.trapz(tau[ii]*np.exp(-(beta**2)*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
+        ret.append(np.trapz(tau[ii]*np.exp(-((beta)*(l_domain - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e), l_domain))
+
+    return np.array(ret/ret[0])
+
+
+# define the likelihood function
+def drift_maxwellian_loglike(theta, l_domain, data, sigma, tau):
+    """
+    A Gaussian log-likelihood function for a model with parameters given in theta
+    """
+    data = np.array(data)
+    model = drift_maxwellian(theta, tau, l_domain)
+    # model = np.flipud(model)
+    # print(data)
+    llh = -0.5*np.log((1/(np.sqrt(2*np.pi)**len(sigma)*np.prod(np.sqrt(sigma**2)))))*np.sum((data - model)**2/((sigma)**2))
     # print(llh)
     return llh
 
@@ -1871,6 +1935,6 @@ class LogLikeGrad(tt.Op):
 
         outputs[0][0] = grads
         
-        
 
-pmdf, trace = inference_button2()
+# analyze_shot(190516030)
+# pmdf, trace = inference_button()
