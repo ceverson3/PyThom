@@ -29,7 +29,7 @@ from scipy.optimize import approx_fprime
 
 
 PLOTS_ON = 1
-FORCE_NEW_NODES = 0
+FORCE_NEW_NODES = 1
 photodiode_baseline_record_fraction = 0.15  # the fraction of the ruby photodiode record to take as the baseline
 num_vacuum_shots = 4
 FAST_GAIN = 1
@@ -46,6 +46,13 @@ style = 'BDA'  # 'Bayes' for Bayesian analysis or 'Ratio' for ratio evaluation m
 sns.set()   # Set the plotting theme
 
 
+def analyze_plasma():
+    LB = get_ts_logbook
+    # pshots = [s for s in LB.loc[LB.Fuel == 'D/He' or LB.Fuel == 'D' or log_book.Fuel == 'He', 'Shot'] = s]
+
+
+
+
 def analyze_shot(shot_number):
     """
     Analyze the Thomson data for shot_number
@@ -60,7 +67,7 @@ def analyze_shot(shot_number):
 
     # Load the analysis tree and the log book
     analysis_tree = Tree('analysis3', shot_number, 'EDIT')
-    log_book = get_ts_logbook(verbose=1)
+    log_book = get_ts_logbook()
 
     # Get the vacuum shots to use for stray light background subtraction
     vacuum_shot_list = get_vacuum_shot_list(shot_number, log_book, num_vacuum_shots)
@@ -101,6 +108,16 @@ def analyze_shot(shot_number):
     scattering_window_start = list([0,0,0,0,0])
     scattering_window_end = list([-1,-1,-1,-1,-1])
 
+    # Get the variance induced in scaling vacuum shots:
+    plasma_laser_energy = get_data('ENERGY_BAYES', analysis_tree)
+    var_ple = get_data('ENERGY_VAR', analysis_tree)
+    var_vac = 0
+
+    for vshot in vacuum_shot_list:
+        vtree = Tree('analysis3', vshot)
+        vac_laser_energy = get_data('ENERGY_BAYES', vtree)
+        var_vle = get_data('ENERGY_VAR', vtree)
+        var_vac = var_vac + ((var_ple)/(vac_laser_energy)**2) + var_vle*((plasma_laser_energy)**2/(vac_laser_energy)**4)
 
 
     # Analyze all active polychromator channels
@@ -125,6 +142,7 @@ def analyze_shot(shot_number):
         # and putting the vacuum shot in the tree if necessary
         vacuum_avg = get_data(channel_id + '_VAC', analysis_tree)
         vacuum_avg_clean = signal.savgol_filter(signal.detrend(vacuum_avg), 101, 3)
+
 
         # Find the signal voltage and the standard deviation signal voltage of the background
         if channel_num == 1:
@@ -163,8 +181,9 @@ def analyze_shot(shot_number):
         tree_write_safe(n_scat, channel_id + '_N_SCAT', tree=analysis_tree)
 
         # Calculate the variances of the measured data:
+        var_scale = (n_stray**2)*var_vac
         var_pe = 4*(n_pe + n_background)
-        var_stray = 4*(n_stray + n_background_stray)
+        var_stray = 4*(n_stray + n_background_stray) + var_scale
         var_bg = 4*n_background
         var_scat = var_pe + var_stray
         tree_write_safe(var_scat, channel_id + '_VAR_SCAT', tree=analysis_tree)
@@ -389,7 +408,7 @@ def build_shot(shot_number):
                         vac_tree = Tree('analysis3', vac_shot)
                         vacuum_sig[ctr] = get_data(channel_id + '_RAW', vac_tree)
                         vacuum_t[ctr] = get_dim(channel_id + '_RAW', vac_tree)
-                        vac_energy = get_data('ENERGY', vac_tree)
+                        vac_energy = get_data('ENERGY_BAYES', vac_tree)
                     except Exception as ex:
                         vac_tree.close()
                         build_shot(vac_shot)
@@ -398,7 +417,7 @@ def build_shot(shot_number):
                         vac_tree = Tree('analysis3', vac_shot)
                         vacuum_sig[ctr] = get_data(channel_id + '_RAW', vac_tree)
                         vacuum_t[ctr] = get_dim(channel_id + '_RAW', vac_tree)
-                        vac_energy = get_data('ENERGY', vac_tree)
+                        vac_energy = get_data('ENERGY_BAYES', vac_tree)
 
                     vac_tree.close()
                     peak_vac_time = log_book.loc[log_book.Shot == vac_shot, 'Pulse_Time'].array[0]
@@ -854,6 +873,7 @@ def tree_write_safe(data_to_write, tag_name, dim=None, tree=None):
     if tree_was is None:
         tree.close()
 
+
 def add_node_safe(tag_name_in, tree):
     """
     Add a node specified by the input tag to the analysis3 tree (default tree is a test tree, shot 888) and include all
@@ -903,12 +923,12 @@ def add_node_safe(tag_name_in, tree):
 def add_parent(node_name_in, tree):
     """
     Recursively adds the parent and grandparent nodes necessary up to the immediate parent of node_name_in.
-    
+
     Parameters
     ----------
     node_name_in: node name full path off of which the last node is stripped to form parent_string
     tree: tree to add node to
-    
+
     Returns
     -------
     """
@@ -1614,18 +1634,19 @@ def inference_button_fixed(poly_id, tree):
 
     tau = {}
     l_domain = {}
-    var_spec = {}
+    cal_var = {}
     var_scat = list([])
     N_scat = list([])
 
     node = analysis_tree.getNode('THOMSON.MEASUREMENTS.' + poly_id + '.N_SCAT')
+    angle_scat = get_data(poly_id + '_THETA', analysis_tree)
 
     channels = np.arange(2, node.getNumDescendants() + 1)
     var_str = poly_id + '_Q_VAR_SCAT'
     for channel in channels:
         cal_str = get_cal_string(analysis_tree.shot, poly_id + '_' + np.str(channel))
 
-        var_spec[channel] = get_data(cal_str.replace('TYPE?', 'V'), analysis_tree)
+        cal_var[channel] = get_data(cal_str.replace('TYPE?', 'V'), analysis_tree)
         l_domain[channel] = get_dim(cal_str.replace('TYPE?', 'T'), analysis_tree)
         tau[channel] = quantum_efficiency(l_domain[channel])*get_data(cal_str.replace('TYPE?', 'T'), analysis_tree)
         var_scat.append(get_data(var_str.replace('Q', np.str(channel)), analysis_tree))
@@ -1635,10 +1656,10 @@ def inference_button_fixed(poly_id, tree):
     N_in = np.array(N_scat)
 
     N = N_in/N_in[0]
-    var = var_in/(N_in[0]**2)
+    var = var_in/(N_in**2)
 
     # create our Op
-    logl = LogLikeWithGrad(fixed_maxwellian_loglike, N, l_domain[2], np.sqrt(var), tau)
+    logl = LogLikeWithGrad(fixed_maxwellian_loglike, N, l_domain[2], np.sqrt(var), tau, cal_var, angle_scat)
 
     # use PyMC3 to sampler from log-likelihood
     with pm.Model() as opmodel:
@@ -1662,21 +1683,23 @@ def inference_button_fixed(poly_id, tree):
         # use a DensityDist
         pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
         # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
-        trace = pm.sample(3000, tune=6000, discard_tuned_samples=True)
+        trace = pm.sample(3000, tune=8000, discard_tuned_samples=True)
 
         # plot the traces
-        # pm.summary(trace)
+        pm.summary(trace)
 
         pmdf = pm.trace_to_dataframe(trace)
+        pm.save_trace(trace, 'home/everson/Dropbox/PyThom/traces/fixed' + np.str(analysis_tree.shot) + poly_id)
 
         # pm.summary(trace)
 
         # samples_pymc3_2 = np.vstack((trace['t_e'])).T
 
-
-        # plt.plot(np.arange(1,len(trace['t_e'])+1),trace['t_e'])
-        # plt.figure()
-        # sns.kdeplot(trace.t_e)
+        if PLOTS_ON == 1:
+            plt.figure()
+            plt.plot(np.arange(1,len(trace['t_e'])+1),trace['t_e'])
+            plt.figure()
+            sns.kdeplot(trace.t_e)
 
         return pmdf, trace
 
@@ -1706,18 +1729,19 @@ def inference_button_drift(poly_id, tree):
 
     tau = {}
     l_domain = {}
-    var_spec = {}
+    cal_var = {}
     var_scat = list([])
     N_scat = list([])
 
     node = analysis_tree.getNode('THOMSON.MEASUREMENTS.' + poly_id + '.N_SCAT')
+    angle_scat = get_data(poly_id + '_THETA', analysis_tree)
 
     channels = np.arange(2, node.getNumDescendants() + 1)
     var_str = poly_id + '_Q_VAR_SCAT'
     for channel in channels:
         cal_str = get_cal_string(analysis_tree.shot, poly_id + '_' + np.str(channel))
 
-        var_spec[channel] = get_data(cal_str.replace('TYPE?', 'V'), analysis_tree)
+        cal_var[channel] = get_data(cal_str.replace('TYPE?', 'V'), analysis_tree)
         l_domain[channel] = get_dim(cal_str.replace('TYPE?', 'T'), analysis_tree)
         tau[channel] = quantum_efficiency(l_domain[channel])*get_data(cal_str.replace('TYPE?', 'T'), analysis_tree)
         var_scat.append(get_data(var_str.replace('Q', np.str(channel)), analysis_tree))
@@ -1728,12 +1752,12 @@ def inference_button_drift(poly_id, tree):
     N_in = np.array(N_scat)
 
     N = N_in/N_in[0]
-    var = var_in/(N_in[0]**2)
+    var = var_in/(N_in**2)
 
 
 
     # create our Op
-    logl = LogLikeWithGrad(drift_maxwellian_loglike, N, l_domain[2], np.sqrt(var), tau)
+    logl = LogLikeWithGrad(drift_maxwellian_loglike, N, l_domain[2], np.sqrt(var), tau, cal_var, angle_scat)
 
     # use PyMC3 to sampler from log-likelihood
     with pm.Model() as opmodel:
@@ -1758,85 +1782,89 @@ def inference_button_drift(poly_id, tree):
         # use a DensityDist
         pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
         # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
-        trace = pm.sample(2000, tune=8000, discard_tuned_samples=True)
+        trace = pm.sample(2000, tune=9000, discard_tuned_samples=True)
 
         # plot the traces
         # pm.summary(trace)
 
         pmdf = pm.trace_to_dataframe(trace)
 
-        # pm.summary(trace)
-
+        pm.summary(trace)
+        pm.save_trace(trace, 'home/everson/Dropbox/PyThom/traces/drift' + np.str(analysis_tree.shot) + poly_id)
         # sns.kdeplot(pmdf.t_e)
 
         # samples_pymc3_2 = np.vstack((trace['t_e'])).T
-        plt.plot(np.arange(1,len(trace['t_e'])+1),trace['t_e'])
-        plt.figure()
-        sns.kdeplot(trace.t_e)
-        plt.figure()
-        plt.plot(np.arange(1,len(trace['v_d'])+1),trace['v_d'])
-        plt.figure()
-        sns.kdeplot(trace.v_d)
+        if PLOTS_ON == 1:
+            plt.figure()
+            plt.plot(np.arange(1,len(trace['t_e'])+1),trace['t_e'])
+            plt.figure()
+            sns.kdeplot(trace.t_e)
+            plt.figure()
+            plt.plot(np.arange(1,len(trace['v_d'])+1),trace['v_d'])
+            plt.figure()
+            sns.kdeplot(trace.v_d)
 
         return pmdf, trace
 
 
     
 # define the model
-def fixed_maxwellian(theta, tau, l_domain):
+def fixed_maxwellian(theta, tau, l_domain, cal_var, angle_scat):
 
     # t_e, n_e, c_geom = theta  # unpack parameters
     t_e = theta  # unpack parameters
-    # TODO replace pi/4 below:
-    beta = C_SPEED*np.sqrt(ELECTRON_MASS)/(2*RUBY_WL*np.sin(np.pi/4)*np.sqrt(2*E_CHARGE))
-    ret = list([])
+    beta = C_SPEED*np.sqrt(ELECTRON_MASS)/(2*RUBY_WL*np.sin(angle_scat/2)*np.sqrt(2*E_CHARGE))
+    tau_h_int = list([])
+    var_spec = list([])
     for ii in np.arange(2,6):
         # ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*1e19*1e-5*np.trapz(tau[ii]*np.exp(-(beta**2)*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
-        ret.append(np.trapz(tau[ii]*np.exp(-(beta**2)*(l_domain - RUBY_WL)**2/t_e)/np.sqrt(t_e), l_domain))
+        tau_h_int.append(np.trapz(tau[ii]*np.exp(-(beta**2)*(l_domain - RUBY_WL)**2/t_e)/np.sqrt(t_e), l_domain))
+        var_spec.append(np.trapz((cal_var[ii])*(np.exp(-(beta**2)*(l_domain - RUBY_WL)**2/t_e)/np.sqrt(t_e))**2, l_domain))
 
-    return np.array(ret/ret[0])
+    return np.array(tau_h_int/tau_h_int[0]), var_spec
 
 
 # define the likelihood function
-def fixed_maxwellian_loglike(theta, l_domain, data, sigma, tau):
+def fixed_maxwellian_loglike(theta, l_domain, data, sigma, tau, cal_var, angle_scat):
     """
     A Gaussian log-likelihood function for a model with parameters given in theta
     """
     data = np.array(data)
-    model = fixed_maxwellian(theta, tau, l_domain)
+    model, var_spec = fixed_maxwellian(theta, tau, l_domain, cal_var, angle_scat)
     # model = np.flipud(model)
     # print(data)
-    llh = -0.5*np.log((1/(np.sqrt(2*np.pi)**len(sigma)*np.prod(np.sqrt(sigma**2)))))*np.sum((data - model)**2/((sigma)**2))
+    llh = -0.5*np.log((1/(np.sqrt(2*np.pi)**len(sigma)*np.prod(np.sqrt(sigma**2)))))*np.sum((data - model)**2/((sigma**2 + var_spec)))
     # print(llh)
     return llh
 
 
 # define the model
-def drift_maxwellian(theta, tau, l_domain):
+def drift_maxwellian(theta, tau, l_domain, cal_var, angle_scat):
 
     # t_e, n_e, c_geom = theta  # unpack parameters
     t_e, v_d = theta  # unpack parameters
     # TODO replace pi/4 below:
     dl = np.mean(np.diff(l_domain))
-    beta = C_SPEED*np.sqrt(ELECTRON_MASS)/(2*RUBY_WL*np.sin(np.pi/4)*np.sqrt(2*E_CHARGE))
-    ret = list([])
+    beta = C_SPEED*np.sqrt(ELECTRON_MASS)/(2*RUBY_WL*np.sin(angle_scat/2)*np.sqrt(2*E_CHARGE))
+    tau_h_int = list([])
+    var_spec = list([])
     for ii in np.arange(2,6):
         # ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*1e19*1e-5*np.trapz(tau[ii]*np.exp(-(beta**2)*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
-        ret.append(np.trapz(tau[ii]*np.exp(-((beta)*(l_domain - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e), l_domain))
-
-    return np.array(ret/ret[0])
+        tau_h_int.append(np.trapz(tau[ii]*np.exp(-((beta)*(l_domain - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e), l_domain))
+        var_spec.append(np.trapz((cal_var[ii])*(np.exp(-((beta)*(l_domain - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e))**2, l_domain))
+    return np.array(tau_h_int/tau_h_int[0]), var_spec
 
 
 # define the likelihood function
-def drift_maxwellian_loglike(theta, l_domain, data, sigma, tau):
+def drift_maxwellian_loglike(theta, l_domain, data, sigma, tau, cal_var, angle_scat):
     """
     A Gaussian log-likelihood function for a model with parameters given in theta
     """
     data = np.array(data)
-    model = drift_maxwellian(theta, tau, l_domain)
+    model, var_spec = drift_maxwellian(theta, tau, l_domain, cal_var, angle_scat)
     # model = np.flipud(model)
     # print(data)
-    llh = -0.5*np.log((1/(np.sqrt(2*np.pi)**len(sigma)*np.prod(np.sqrt(sigma**2)))))*np.sum((data - model)**2/((sigma)**2))
+    llh = -0.5*np.log((1/(np.sqrt(2*np.pi)**len(sigma)*np.prod(np.sqrt(sigma**2)))))*np.sum((data - model)**2/((sigma**2 + var_spec)))
     # print(llh)
     return llh
 
@@ -1846,7 +1874,7 @@ class LogLikeWithGrad(tt.Op):
     itypes = [tt.dvector] # expects a vector of parameter values when called
     otypes = [tt.dscalar] # outputs a single scalar value (the log likelihood)
 
-    def __init__(self, loglike, data, x, sigma, tau):
+    def __init__(self, loglike, data, x, sigma, tau, cal_var, angle_scat):
         """
         Initialise with various things that the function requires. Below
         are the things that are needed in this particular example.
@@ -1869,16 +1897,18 @@ class LogLikeWithGrad(tt.Op):
         self.x = x
         self.sigma = sigma
         self.tau = tau
+        self.cal_var = cal_var
+        self.angle_scat = angle_scat
 
         # initialise the gradient Op (below)
-        self.logpgrad = LogLikeGrad(self.likelihood, self.data, self.x, self.sigma, self.tau)
+        self.logpgrad = LogLikeGrad(self.likelihood, self.data, self.x, self.sigma, self.tau, self.cal_var, self.angle_scat)
 
     def perform(self, node, inputs, outputs):
         # the method that is used when calling the Op
         theta, = inputs  # this will contain my variables
 
         # call the log-likelihood function
-        logl = self.likelihood(theta, self.x, self.data, self.sigma, self.tau)
+        logl = self.likelihood(theta, self.x, self.data, self.sigma, self.tau, self.cal_var, self.angle_scat)
 
         outputs[0][0] = np.array(logl) # output the log-likelihood
 
@@ -1898,7 +1928,7 @@ class LogLikeGrad(tt.Op):
     itypes = [tt.dvector]
     otypes = [tt.dvector]
 
-    def __init__(self, loglike, data, x, sigma, tau):
+    def __init__(self, loglike, data, x, sigma, tau, cal_var, angle_scat):
         """
         Initialise with various things that the function requires. Below
         are the things that are needed in this particular example.
@@ -1921,13 +1951,15 @@ class LogLikeGrad(tt.Op):
         self.x = x
         self.sigma = sigma
         self.tau = tau
-        
+        self.cal_var = cal_var
+        self.angle_scat = angle_scat
+
     def perform(self, node, inputs, outputs):
         theta, = inputs
 
         # define version of likelihood function to pass to derivative function
         def lnlike(values):
-            return self.likelihood(values, self.x, self.data, self.sigma, self.tau)
+            return self.likelihood(values, self.x, self.data, self.sigma, self.tau, self.cal_var, self.angle_scat)
 
         # calculate gradients
         # grads = gradients(theta, lnlike)
