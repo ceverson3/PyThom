@@ -28,8 +28,8 @@ import theano.tensor as tt
 from scipy.optimize import approx_fprime
 
 
-PLOTS_ON = 1
-FORCE_NEW_NODES = 1
+PLOTS_ON = 0
+FORCE_NEW_NODES = 0
 photodiode_baseline_record_fraction = 0.15  # the fraction of the ruby photodiode record to take as the baseline
 num_vacuum_shots = 4
 FAST_GAIN = 1
@@ -47,9 +47,21 @@ sns.set()   # Set the plotting theme
 
 
 def analyze_plasma():
-    LB = get_ts_logbook
+    log_book = get_ts_logbook()
     # pshots = [s for s in LB.loc[LB.Fuel == 'D/He' or LB.Fuel == 'D' or log_book.Fuel == 'He', 'Shot'] = s]
+    pshots_list = [str(shot) for shot in log_book['Shot'] if (log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'D'
+                                                               or log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'He'
+                                                               or log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'D/He')]
 
+    PATH = '/home/everson/Dropbox/PyThom/logs/'
+    logf = open(PATH + 'PyThom.log', "w")
+
+    for shot in pshots_list:
+        try:
+            analyze_shot(shot)
+            logf.write("Shot {0}: {1}\n".format(str(shot), ' OK'))
+        except Exception as ex:
+            logf.write("Shot {0}: error {1}\n".format(str(shot), str(ex)))
 
 
 
@@ -118,6 +130,8 @@ def analyze_shot(shot_number):
         vac_laser_energy = get_data('ENERGY_BAYES', vtree)
         var_vle = get_data('ENERGY_VAR', vtree)
         var_vac = var_vac + ((var_ple)/(vac_laser_energy)**2) + var_vle*((plasma_laser_energy)**2/(vac_laser_energy)**4)
+        vtree.close()
+
 
 
     # Analyze all active polychromator channels
@@ -211,20 +225,41 @@ def analyze_shot(shot_number):
                 pmdf_fixed[poly], trace_fixed[poly] = inference_button_fixed(poly_id, analysis_tree)
                 pmdf_drift[poly], trace_drift[poly] = inference_button_drift(poly_id, analysis_tree)
 
+                summary_f = pm.summary(trace_fixed[poly])
+                summary_d = pm.summary(trace_drift[poly])
+                summary_f.to_csv(np.str(analysis_tree.shot) + poly_id + 'fixed.csv', index=False)
+                summary_d.to_csv(np.str(analysis_tree.shot) + poly_id + 'drift.csv', index=False)
+
+                tree_write_safe(np.array(pmdf_fixed[poly].t_e), poly_id + '_T_E_FIXED', np.arange(1,len(pmdf_fixed[poly].t_e)+1), tree=analysis_tree)
+                tree_write_safe(np.array(pmdf_drift[poly].t_e), poly_id + '_T_E_DRIFT', np.arange(1,len(pmdf_drift[poly].t_e)+1), tree=analysis_tree)
+                tree_write_safe(np.array(pmdf_drift[poly].v_d), poly_id + '_V_D_DRIFT', np.arange(1,len(pmdf_drift[poly].v_d)+1), tree=analysis_tree)
+
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_fixed'] = summary_f['mean'][0]
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_fixed_hpd95low'] = summary_f['hpd_2.5'][0]
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_fixed_hpd95high'] = summary_f['hpd_97.5'][0]
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_fixed_Rhat'] = summary_f['Rhat'][0]
+
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_drift'] = summary_d['mean'][0]
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_drift_hpd95low'] = summary_d['hpd_2.5'][0]
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_drift_hpd95high'] = summary_d['hpd_97.5'][0]
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_drift_Rhat'] = summary_d['Rhat'][0]
+
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_v_d_drift'] = summary_d['mean'][1]
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_v_d_drift_hpd95low'] = summary_d['hpd_2.5'][1]
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_v_d_drift_hpd95high'] = summary_d['hpd_97.5'][1]
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_v_d_drift_Rhat'] = summary_d['Rhat'][1]
+
+
+
+
+
+
+
+                # return pmdf_fixed, trace_fixed, pmdf_drift, trace_drift
+
 
     else:
         print('Pick either style = BDA or REM')
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -247,6 +282,7 @@ def analyze_shot(shot_number):
     log_book.to_csv(record_filename, index=False)
     log_book.to_csv(latest_filename, index=False)
 
+    analysis_tree.close()
 
 
 def build_shot(shot_number):
@@ -1311,6 +1347,9 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_1_Z_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:Z_POS', 'NUMERIC', 'm', ''],
                                          ['POLY_1_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_1_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
+                                         ['POLY_1_T_E_FIXED', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.BAYES:T_E_FIXED', 'SIGNAL', 'eV', ''],
+                                         ['POLY_1_T_E_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.BAYES:T_E_DRIFT', 'SIGNAL', 'eV', ''],
+                                         ['POLY_1_V_D_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.BAYES:V_D_DRIFT', 'SIGNAL', 'm/s', ''],
                                          ['POLY_1_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
                                          ['POLY_2_LENGTH', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:LENGTH', 'NUMERIC', 'm', ''],
                                          ['POLY_2_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:R', 'NUMERIC', 'm', ''],
@@ -1322,6 +1361,9 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_2_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_2_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
                                          ['POLY_2_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_2_T_E_FIXED', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.BAYES:T_E_FIXED', 'SIGNAL', 'eV', ''],
+                                         ['POLY_2_T_E_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.BAYES:T_E_DRIFT', 'SIGNAL', 'eV', ''],
+                                         ['POLY_2_V_D_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.BAYES:V_D_DRIFT', 'SIGNAL', 'm/s', ''],
                                          ['POLY_3_LENGTH', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:LENGTH', 'NUMERIC', 'm', ''],
                                          ['POLY_3_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:R', 'NUMERIC', 'm', ''],
                                          ['POLY_3_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:Z', 'NUMERIC', 'm', ''],
@@ -1332,6 +1374,9 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_3_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_3_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
                                          ['POLY_3_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_3_T_E_FIXED', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.BAYES:T_E_FIXED', 'SIGNAL', 'eV', ''],
+                                         ['POLY_3_T_E_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.BAYES:T_E_DRIFT', 'SIGNAL', 'eV', ''],
+                                         ['POLY_3_V_D_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.BAYES:V_D_DRIFT', 'SIGNAL', 'm/s', ''],
                                          ['POLY_4_LENGTH', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:LENGTH', 'NUMERIC', 'm', ''],
                                          ['POLY_4_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:R', 'NUMERIC', 'm', ''],
                                          ['POLY_4_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:Z', 'NUMERIC', 'm', ''],
@@ -1342,6 +1387,9 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_4_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_4_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
                                          ['POLY_4_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_4_T_E_FIXED', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.BAYES:T_E_FIXED', 'SIGNAL', 'eV', ''],
+                                         ['POLY_4_T_E_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.BAYES:T_E_DRIFT', 'SIGNAL', 'eV', ''],
+                                         ['POLY_4_V_D_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.BAYES:V_D_DRIFT', 'SIGNAL', 'm/s', ''],
                                          ['POLY_5_LENGTH', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:LENGTH', 'NUMERIC', 'm', ''],
                                          ['POLY_5_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:R', 'NUMERIC', 'm', ''],
                                          ['POLY_5_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:Z', 'NUMERIC', 'm', ''],
@@ -1352,6 +1400,9 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_5_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_5_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
                                          ['POLY_5_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
+                                         ['POLY_5_T_E_FIXED', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.BAYES:T_E_FIXED', 'SIGNAL', 'eV', ''],
+                                         ['POLY_5_T_E_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.BAYES:T_E_DRIFT', 'SIGNAL', 'eV', ''],
+                                         ['POLY_5_V_D_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.BAYES:V_D_DRIFT', 'SIGNAL', 'm/s', ''],
                                          ['POLY_1_1_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_1', 'SIGNAL', 'V', 's'],
                                          ['POLY_1_2_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_2', 'SIGNAL', 'V', 's'],
                                          ['POLY_1_3_RAW', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.RAW:CHANNEL_3', 'SIGNAL', 'V', 's'],
@@ -1683,13 +1734,13 @@ def inference_button_fixed(poly_id, tree):
         # use a DensityDist
         pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
         # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
-        trace = pm.sample(3000, tune=8000, discard_tuned_samples=True)
+        fixed_trace = pm.sample(3000, tune=9000, discard_tuned_samples=True)
 
         # plot the traces
-        pm.summary(trace)
+        pm.summary(fixed_trace)
 
-        pmdf = pm.trace_to_dataframe(trace)
-        pm.save_trace(trace, 'home/everson/Dropbox/PyThom/traces/fixed' + np.str(analysis_tree.shot) + poly_id)
+        pmdf = pm.trace_to_dataframe(fixed_trace)
+        # pm.save_trace(trace, 'home/everson/Dropbox/PyThom/traces/fixed' + np.str(analysis_tree.shot) + poly_id)
 
         # pm.summary(trace)
 
@@ -1697,11 +1748,11 @@ def inference_button_fixed(poly_id, tree):
 
         if PLOTS_ON == 1:
             plt.figure()
-            plt.plot(np.arange(1,len(trace['t_e'])+1),trace['t_e'])
+            plt.plot(np.arange(1,len(fixed_trace['t_e'])+1),fixed_trace['t_e'])
             plt.figure()
-            sns.kdeplot(trace.t_e)
+            sns.kdeplot(fixed_trace.t_e)
 
-        return pmdf, trace
+        return pmdf, fixed_trace
 
 
 def inference_button_drift(poly_id, tree):
@@ -1782,29 +1833,29 @@ def inference_button_drift(poly_id, tree):
         # use a DensityDist
         pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
         # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
-        trace = pm.sample(2000, tune=9000, discard_tuned_samples=True)
+        drift_trace = pm.sample(2000, tune=9000, discard_tuned_samples=True)
 
         # plot the traces
         # pm.summary(trace)
 
-        pmdf = pm.trace_to_dataframe(trace)
+        pmdf = pm.trace_to_dataframe(drift_trace)
 
-        pm.summary(trace)
-        pm.save_trace(trace, 'home/everson/Dropbox/PyThom/traces/drift' + np.str(analysis_tree.shot) + poly_id)
+        pm.summary(drift_trace)
+        # pm.save_trace(trace, 'home/everson/Dropbox/PyThom/traces/drift' + np.str(analysis_tree.shot) + poly_id)
         # sns.kdeplot(pmdf.t_e)
 
         # samples_pymc3_2 = np.vstack((trace['t_e'])).T
         if PLOTS_ON == 1:
             plt.figure()
-            plt.plot(np.arange(1,len(trace['t_e'])+1),trace['t_e'])
+            plt.plot(np.arange(1,len(drift_trace['t_e'])+1),drift_trace['t_e'])
             plt.figure()
-            sns.kdeplot(trace.t_e)
+            sns.kdeplot(drift_trace.t_e)
             plt.figure()
-            plt.plot(np.arange(1,len(trace['v_d'])+1),trace['v_d'])
+            plt.plot(np.arange(1,len(drift_trace['v_d'])+1),drift_trace['v_d'])
             plt.figure()
-            sns.kdeplot(trace.v_d)
+            sns.kdeplot(drift_trace.v_d)
 
-        return pmdf, trace
+        return pmdf, drift_trace
 
 
     
@@ -1970,3 +2021,4 @@ class LogLikeGrad(tt.Op):
 
 # analyze_shot(190516030)
 # pmdf, trace = inference_button()
+analyze_plasma()

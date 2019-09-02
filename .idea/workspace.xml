@@ -2,11 +2,41 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="d6d201dc-169a-4e11-9ca6-665bb642cc46" name="Default Changelist" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.~lock.TS_analysis_logbook.csv#" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/PyThom.py" beforeDir="false" afterPath="$PROJECT_DIR$/PyThom.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test2.py" beforeDir="false" afterPath="$PROJECT_DIR$/test2.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/test3h.py" beforeDir="false" afterPath="$PROJECT_DIR$/test3h.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/TS_analysis_logbook.csv" beforeDir="false" afterPath="$PROJECT_DIR$/TS_analysis_logbook.csv" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_3/0/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_3/0/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_3/1/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_3/1/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_3/2/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_3/2/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_3/3/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_3/3/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_4/0/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_4/0/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_4/1/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_4/1/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_4/2/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_4/2/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_4/3/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/drift190220010POLY_4/3/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_3/0/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_3/0/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_3/1/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_3/1/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_3/2/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_3/2/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_3/3/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_3/3/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_4/0/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_4/0/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_4/1/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_4/1/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_4/2/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_4/2/samples.npz" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_4/3/metadata.json" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/home/everson/Dropbox/PyThom/traces/fixed190220010POLY_4/3/samples.npz" beforeDir="false" />
     </list>
     <option name="EXCLUDED_CONVERTED_TO_IGNORED" value="true" />
     <option name="SHOW_DIALOG" value="false" />
@@ -19,8 +49,8 @@
       <file pinned="false" current-in-tab="true">
         <entry file="file://$PROJECT_DIR$/PyThom.py">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="-699">
-              <caret line="1179" column="34" selection-start-line="1179" selection-start-column="34" selection-end-line="1179" selection-end-column="34" />
+            <state relative-caret-position="159">
+              <caret line="99" column="61" lean-forward="true" selection-start-line="99" selection-start-column="61" selection-end-line="99" selection-end-column="61" />
               <folding>
                 <element signature="e#120#164#0" expanded="true" />
               </folding>
@@ -63,7 +93,7 @@
       </list>
     </option>
   </component>
-  <component name="ProjectFrameBounds">
+  <component name="ProjectFrameBounds" extendedState="6">
     <option name="y" value="23" />
     <option name="width" value="960" />
     <option name="height" value="877" />
@@ -164,14 +194,15 @@
       <workItem from="1565836732257" duration="11000" />
       <workItem from="1565841292978" duration="43000" />
       <workItem from="1566965419461" duration="804000" />
+      <workItem from="1567278259561" duration="69000" />
     </task>
     <servers />
   </component>
   <component name="TimeTrackingManager">
-    <option name="totallyTimeSpent" value="8826000" />
+    <option name="totallyTimeSpent" value="8895000" />
   </component>
   <component name="ToolWindowManager">
-    <frame x="0" y="23" width="960" height="877" extended-state="0" />
+    <frame x="0" y="23" width="1440" height="877" extended-state="6" />
     <layout>
       <window_info id="Favorites" order="0" side_tool="true" />
       <window_info content_ui="combo" id="Project" order="1" weight="0.22440088" />
@@ -180,7 +211,7 @@
       <window_info anchor="bottom" id="Database Changes" order="1" />
       <window_info anchor="bottom" id="Terminal" order="2" weight="0.3299363" />
       <window_info anchor="bottom" id="Event Log" order="3" side_tool="true" weight="0.3299363" />
-      <window_info anchor="bottom" x="960" y="45" width="480" height="855" id="Python Console" order="4" type="WINDOWED" visible="true" weight="0.3299363" />
+      <window_info anchor="bottom" x="960" y="45" width="480" height="855" id="Python Console" order="4" type="WINDOWED" weight="0.3299363" />
       <window_info anchor="bottom" id="Docker" order="5" show_stripe_button="false" />
       <window_info anchor="bottom" id="Message" order="6" />
       <window_info anchor="bottom" id="Find" order="7" />
@@ -191,7 +222,7 @@
       <window_info anchor="bottom" id="TODO" order="12" />
       <window_info anchor="right" id="R Graphics" order="0" />
       <window_info anchor="right" id="R Packages" order="1" />
-      <window_info active="true" anchor="right" x="960" y="45" width="480" height="855" id="Documentation" order="2" sideWeight="0.50063694" side_tool="true" visible="true" weight="0.21568628" />
+      <window_info anchor="right" x="960" y="45" width="480" height="855" id="Documentation" order="2" sideWeight="0.50063694" side_tool="true" visible="true" weight="0.1416309" />
       <window_info anchor="right" x="720" y="45" width="720" height="855" id="SciView" order="3" sideWeight="0.49936306" type="WINDOWED" weight="0.2160229" />
       <window_info anchor="right" id="Commander" order="4" weight="0.4" />
       <window_info anchor="right" id="Ant Build" order="5" weight="0.25" />
@@ -238,8 +269,8 @@
     </entry>
     <entry file="file://$PROJECT_DIR$/PyThom.py">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="-699">
-          <caret line="1179" column="34" selection-start-line="1179" selection-start-column="34" selection-end-line="1179" selection-end-column="34" />
+        <state relative-caret-position="159">
+          <caret line="99" column="61" lean-forward="true" selection-start-line="99" selection-start-column="61" selection-end-line="99" selection-end-column="61" />
           <folding>
             <element signature="e#120#164#0" expanded="true" />
           </folding>
