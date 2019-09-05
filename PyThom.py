@@ -45,23 +45,71 @@ RUBY_WL = 694.3e-9  # [m]
 style = 'BDA'  # 'Bayes' for Bayesian analysis or 'Ratio' for ratio evaluation method
 sns.set()   # Set the plotting theme
 
+def clear_thomson_tree(shot=None):
+    log_book = get_ts_logbook()
+    shots_list = [shot for shot in log_book['Shot'] if (log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'D'
+                                                               or log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'He'
+                                                               or log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'D/He'
+                                                               or log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'V')]
+    if shot == None:
+        for shot in shots_list:
+    
+            tree = Tree('analysis3', shot, 'EDIT')
+            try:
+                tree.getNode('\\ANALYSIS3::TOP.THOMSON')
+                print("Node found shot %d" % shot)
+            except:
+                continue
+            tree.deleteNode('\\ANALYSIS3::TOP.THOMSON')
+            print("Node deleted")
+            #tree.quit()
+            #print("Tree Quit")
+            tree.write()
+            print("Tree wrote")
+            tree.close()
+            print("Tree Closed")
+    else:
+        tree = Tree('analysis3', shot, 'EDIT')
+        try:
+            tree.getNode('\\ANALYSIS3::TOP.THOMSON')
+            print("Node found shot %d" % shot)
+        except:
+            pass
+        tree.deleteNode('\\ANALYSIS3::TOP.THOMSON')
+        print("Node deleted")
+        #tree.quit()
+        #print("Tree Quit")
+        tree.write()
+        print("Tree wrote")
+        tree.close()
+        print("Tree Closed")
+
 
 def analyze_plasma():
     log_book = get_ts_logbook()
     # pshots = [s for s in LB.loc[LB.Fuel == 'D/He' or LB.Fuel == 'D' or log_book.Fuel == 'He', 'Shot'] = s]
-    pshots_list = [str(shot) for shot in log_book['Shot'] if (log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'D'
+    pshots_list = [shot for shot in log_book['Shot'] if (log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'D'
                                                                or log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'He'
                                                                or log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'D/He')]
 
     PATH = '/home/everson/Dropbox/PyThom/logs/'
-    logf = open(PATH + 'PyThom.log', "w")
-
+    # PATH = '/Users/chris/Dropbox/PyThom/logs/'
+    print('Starting full analysis...')
     for shot in pshots_list:
-        try:
-            analyze_shot(shot)
-            logf.write("Shot {0}: {1}\n".format(str(shot), ' OK'))
-        except Exception as ex:
-            logf.write("Shot {0}: error {1}\n".format(str(shot), str(ex)))
+        if shot > 190000000:
+            # analyze_shot(shot)
+            # with open(PATH + 'PyThom.log', 'a') as logf:
+            #     logf.write("Shot {0}: {1}\n".format(str(shot), ' OK'))
+            try:
+                analyze_shot(shot)
+                with open(PATH + 'PyThom.log', 'a') as logf:
+                    logf.write("Shot {0}: {1}\n".format(str(shot), ' OK'))
+            except Exception as ex:
+                with open(PATH + 'PyThom.log', 'a') as logf:
+                    logf.write("Shot {0}: error {1}\n".format(str(shot), str(ex)))
+
+        else:
+            pass
 
 
 
@@ -109,7 +157,7 @@ def analyze_shot(shot_number):
 
     # Get a list of the active polychromators by name
     regex = re.compile('POLY_._.')
-    channel_list = [string for string in log_book.columns if re.match(regex, string) and log_book.loc[log_book.Shot == shot_number, string].array[0] != 0]
+    channel_list = [string for string in log_book.columns if re.match(regex, string) and log_book.loc[log_book.Shot == shot_number, string].array[0] != 0 and len(string) == 8]
     poly_list = np.unique([np.int(ch[-3]) for ch in channel_list])
 
     # TODO possibly remove next line
@@ -227,8 +275,9 @@ def analyze_shot(shot_number):
 
                 summary_f = pm.summary(trace_fixed[poly])
                 summary_d = pm.summary(trace_drift[poly])
-                summary_f.to_csv(np.str(analysis_tree.shot) + poly_id + 'fixed.csv', index=False)
-                summary_d.to_csv(np.str(analysis_tree.shot) + poly_id + 'drift.csv', index=False)
+                
+                summary_f.to_csv('traces/' + np.str(analysis_tree.shot) + poly_id + 'fixed.csv', index=False)
+                summary_d.to_csv('traces/' + np.str(analysis_tree.shot) + poly_id + 'drift.csv', index=False)
 
                 tree_write_safe(np.array(pmdf_fixed[poly].t_e), poly_id + '_T_E_FIXED', np.arange(1,len(pmdf_fixed[poly].t_e)+1), tree=analysis_tree)
                 tree_write_safe(np.array(pmdf_drift[poly].t_e), poly_id + '_T_E_DRIFT', np.arange(1,len(pmdf_drift[poly].t_e)+1), tree=analysis_tree)
@@ -405,8 +454,8 @@ def build_shot(shot_number):
 
     # Get a list of the active polychromators by name
     regex = re.compile('POLY_._.')
-    channel_list = [string for string in log_book.columns if re.match(regex, string) and log_book.loc[log_book.Shot == shot_number, string].array[0] != 0]
-
+    channel_list = [string for string in log_book.columns if re.match(regex, string) and log_book.loc[log_book.Shot == shot_number, string].array[0] != 0 and len(string) == 8]
+    
     # Get the geometric parameters for the measurements of shot_number
     geometry = get_spot_geometry(log_book.loc[log_book.Shot == shot_number, 'Mount_Positions'].array[0], log_book.loc[log_book.Shot == shot_number, 'Jack_Height'].array[0])
 
@@ -950,6 +999,7 @@ def add_node_safe(tag_name_in, tree):
             print(message)
             return -1
 
+    print(node_string)
     node = tree.getNode(node_string)
     node.setUsage(node_usage)
 
