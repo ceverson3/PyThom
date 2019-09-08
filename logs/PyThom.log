@@ -279,3 +279,249 @@ Shot 190501015: error operands could not be broadcast together with shapes (9952
 Shot 190507013: error index 1 is out of bounds for axis 0 with size 0
 Shot 190508008:  OK
 Shot 190508015: error %TREE-W-NNF, Node Not Found
+Shot 190220007:  OK
+Shot 190220008:  OK
+Shot 190220009:  OK
+Shot 190220010:  OK
+Shot 190220012:  OK
+Shot 190220013:  OK
+Shot 190226007:  OK
+Shot 190226007: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190226008:  OK
+Shot 190226009:  OK
+Shot 190226012:  OK
+Shot 190227006:  OK
+Shot 190227006: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190227007:  OK
+Shot 190227008:  OK
+Shot 190227009:  OK
+Shot 190227010:  OK
+Shot 190227012:  OK
+Shot 190227013:  OK
+Shot 190227014:  OK
+Shot 190227015:  OK
+Shot 190227017:  OK
+Shot 190227019:  OK
+Shot 190227019: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190227020:  OK
+Shot 190227021:  OK
+Shot 190228008:  OK
+Shot 190228008: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190228009:  OK
+Shot 190228010:  OK
+Shot 190228011: error %TREE-E-NODATA, No data available for this node
+Shot 190228011: error %TREE-E-NODATA, No data available for this node, retrying...
+Shot 190508015: error %TREE-W-NNF, Node Not Found
+Shot 190508015: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190508016: error %TREE-W-NNF, Node Not Found
+Shot 190508016: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190508015: error slice indices must be integers or None or have an __index__ method
+Shot 190508015: error slice indices must be integers or None or have an __index__ method, retrying...
+Shot 190508016: error slice indices must be integers or None or have an __index__ method
+Shot 190508016: error slice indices must be integers or None or have an __index__ method, retrying...
+Shot 190508017: error slice indices must be integers or None or have an __index__ method
+Shot 190508017: error slice indices must be integers or None or have an __index__ method, retrying...
+Shot 190509010: error index 1 is out of bounds for axis 0 with size 0, retrying...
+Shot 190131016: error %TREE-W-NNF, Node Not Found
+Shot 190131016: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190131021:  OK
+Shot 190131021: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190214010:  OK
+Shot 190214010: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190219013:  OK
+Shot 190228012: error operands could not be broadcast together with shapes (4,) (134,) 
+Shot 190228012: error operands could not be broadcast together with shapes (4,) (134,) , retrying...
+Shot 190228013:  OK
+Shot 190228014:  OK
+Shot 190228016:  OK
+Shot 190228017:  OK
+Shot 190228018:  OK
+Shot 190228019:  OK
+Shot 190228020:  OK
+Shot 190228021:  OK
+Shot 190306022:  OK
+Shot 190307016:  OK
+Shot 190307023:  OK
+Shot 190314010:  OK
+Shot 190320009:  OK
+Shot 190320009: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190320011:  OK
+Shot 190320012:  OK
+Shot 190320013:  OK
+Shot 190320014: error %TREE-E-NODATA, No data available for this node
+Shot 190320014: error %TREE-E-NODATA, No data available for this node, retrying...
+Shot 190320015: error %TREE-E-NODATA, No data available for this node
+Shot 190320015: error %TREE-E-NODATA, No data available for this node, retrying...
+Shot 190320016: error %TREE-W-NNF, Node Not Found
+Shot 190320016: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190320017: error %TREE-W-NNF, Node Not Found
+Shot 190320017: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190320018:  OK
+Shot 190320018: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190320020:  OK
+Shot 190321007:  OK
+Shot 190321008:  OK
+Shot 190321009:  OK
+Shot 190321010:  OK
+Shot 190321011:  OK
+Shot 190321012:  OK
+Shot 190321013:  OK
+Shot 190321014:  OK
+Shot 190327008: error %TREE-W-NNF, Node Not Found
+Shot 190327008: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190327009:  OK
+Shot 190327010:  OK
+Shot 190327011:  OK
+Shot 190327012:  OK
+Shot 190327013:  OK
+Shot 190327014:  OK
+Shot 190327015:  OK
+Shot 190327016:  OK
+Shot 190327017:  OK
+Shot 190327018:  OK
+Shot 190327019:  OK
+Shot 190327020:  OK
+Shot 190327021:  OK
+Shot 190327022:  OK
+Shot 190327023:  OK
+Shot 190327024:  OK
+Shot 190327027:  OK
+Shot 190327028:  OK
+Shot 190409012:  OK
+Shot 190409013:  OK
+Shot 190409014:  OK
+Shot 190409015:  OK
+Shot 190409016:  OK
+Shot 190410006:  OK
+Shot 190410006: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190410011: error Chain 0 failed.
+Shot 190410011: error Chain 1 failed., retrying...
+Shot 190411008:  OK
+Shot 190411009:  OK
+Shot 190411010:  OK
+Shot 190411011:  OK
+Shot 190411012:  OK
+Shot 190411013:  OK
+Shot 190411014:  OK
+Shot 190411015:  OK
+Shot 190411016:  OK
+Shot 190411017:  OK
+Shot 190411018:  OK
+Shot 190501008:  OK
+Shot 190501008: error operands could not be broadcast together with shapes (9952,) (10000,) , retrying...
+Shot 190501009:  OK
+Shot 190501010:  OK
+Shot 190501011:  OK
+Shot 190501012:  OK
+Shot 190501013:  OK
+Shot 190501014:  OK
+Shot 190501015:  OK
+Shot 190507013:  OK
+Shot 190508015:  OK
+Shot 190508016:  OK
+Shot 190508017:  OK
+Shot 190509010:  OK
+Shot 190509010: error operands could not be broadcast together with shapes (9952,) (10000,) , retrying...
+Shot 190509011:  OK
+Shot 190509012:  OK
+Shot 190509013:  OK
+Shot 190509014:  OK
+Shot 190514010:  OK
+Shot 190514010: error %TREE-W-NNF, Node Not Found, retrying...
+Shot 190514011:  OK
+Shot 190514012:  OK
+Shot 190514013:  OK
+Shot 190514014:  OK
+Shot 190514015:  OK
+Shot 190514016:  OK
+Shot 190514017:  OK
+Shot 190514020:  OK
+Shot 190514021:  OK
+Shot 190514022:  OK
+Shot 190515007:  OK
+Shot 190515009:  OK
+Shot 190515010:  OK
+Shot 190515011:  OK
+Shot 190515012:  OK
+Shot 190515013:  OK
+Shot 190515014:  OK
+Shot 190515015:  OK
+Shot 190515016:  OK
+Shot 190515017:  OK
+Shot 190515018:  OK
+Shot 190515019:  OK
+Shot 190515020:  OK
+Shot 190515021:  OK
+Shot 190515022:  OK
+Shot 190515023:  OK
+Shot 190515024:  OK
+Shot 190515026:  OK
+Shot 190515027:  OK
+Shot 190515028:  OK
+Shot 190515029:  OK
+Shot 190515030:  OK
+Shot 190516005:  OK
+Shot 190516006:  OK
+Shot 190516007:  OK
+Shot 190516008:  OK
+Shot 190516009:  OK
+Shot 190516011:  OK
+Shot 190516012:  OK
+Shot 190516013:  OK
+Shot 190516014:  OK
+Shot 190516015:  OK
+Shot 190516016:  OK
+Shot 190516017:  OK
+Shot 190516019:  OK
+Shot 190516020:  OK
+Shot 190516021:  OK
+Shot 190516022:  OK
+Shot 190516023:  OK
+Shot 190516024:  OK
+Shot 190516025:  OK
+Shot 190516026:  OK
+Shot 190516027:  OK
+Shot 190516028:  OK
+Shot 190516029:  OK
+Shot 190516030:  OK
+Shot 190516032:  OK
+Shot 190516033:  OK
+Shot 190523015:  OK
+Shot 190523016:  OK
+Shot 190612009:  OK
+Shot 190612010:  OK
+Shot 190612017:  OK
+Shot 190612018:  OK
+Shot 190612019:  OK
+Shot 190612020:  OK
+Shot 190612021: error Chain 1 failed.
+Shot 190612021: error Chain 3 failed., retrying...
+Shot 190612022:  OK
+Shot 190612023:  OK
+Shot 190612024:  OK
+Shot 190612025:  OK
+Shot 190612027:  OK
+Shot 190613007:  OK
+Shot 190613008:  OK
+Shot 190613009:  OK
+Shot 190613010:  OK
+Shot 190613011:  OK
+Shot 190613012:  OK
+Shot 190613013:  OK
+Shot 190613015:  OK
+Shot 190613016:  OK
+Shot 190613017:  OK
+Shot 190613018:  OK
+Shot 190613019:  OK
+Shot 190613020:  OK
+Shot 190613021:  OK
+Shot 190613022:  OK
+Shot 190619005:  OK
+Shot 190619010:  OK
+Shot 190619013:  OK
+Shot 190619014:  OK
+Shot 190619016:  OK
+Shot 190501005:  OK
+Shot 190501006:  OK
+Shot 190501007:  OK
+Shot 190501008:  OK

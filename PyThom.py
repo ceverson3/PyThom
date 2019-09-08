@@ -27,7 +27,6 @@ import theano
 import theano.tensor as tt
 from scipy.optimize import approx_fprime
 
-
 PLOTS_ON = 0
 FORCE_NEW_NODES = 0
 photodiode_baseline_record_fraction = 0.15  # the fraction of the ruby photodiode record to take as the baseline
@@ -45,6 +44,11 @@ RUBY_WL = 694.3e-9  # [m]
 style = 'BDA'  # 'Bayes' for Bayesian analysis or 'Ratio' for ratio evaluation method
 sns.set()   # Set the plotting theme
 
+
+def get_finished_logbook():
+    pass
+
+
 def clear_thomson_tree(shot=None):
     log_book = get_ts_logbook()
     shots_list = [shot for shot in log_book['Shot'] if (log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'D'
@@ -52,6 +56,7 @@ def clear_thomson_tree(shot=None):
                                                                or log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'D/He'
                                                                or log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'V')]
     if shot == None:
+        return 1
         for shot in shots_list:
     
             tree = Tree('analysis3', shot, 'EDIT')
@@ -85,28 +90,43 @@ def clear_thomson_tree(shot=None):
         print("Tree Closed")
 
 
-def analyze_plasma():
+def analyze_plasma(start=None, stop=None):
     log_book = get_ts_logbook()
     # pshots = [s for s in LB.loc[LB.Fuel == 'D/He' or LB.Fuel == 'D' or log_book.Fuel == 'He', 'Shot'] = s]
     pshots_list = [shot for shot in log_book['Shot'] if (log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'D'
                                                                or log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'He'
                                                                or log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'D/He')]
 
+    if start is None:
+        start = 190000000
+
+    if stop is None:
+        stop = pshots_list[-1]
     PATH = '/home/everson/Dropbox/PyThom/logs/'
     # PATH = '/Users/chris/Dropbox/PyThom/logs/'
     print('Starting full analysis...')
-    for shot in pshots_list:
-        if shot > 190000000:
+    for pshot in pshots_list:
+        if pshot >= start and pshot <= stop:
             # analyze_shot(shot)
             # with open(PATH + 'PyThom.log', 'a') as logf:
-            #     logf.write("Shot {0}: {1}\n".format(str(shot), ' OK'))
+            #     logf.write("Shot {0}: {1}\n".format(str(pshot), ' OK'))
             try:
-                analyze_shot(shot)
+                analyze_shot(pshot)
                 with open(PATH + 'PyThom.log', 'a') as logf:
-                    logf.write("Shot {0}: {1}\n".format(str(shot), ' OK'))
+                    logf.write("Shot {0}: {1}\n".format(str(pshot), ' OK'))
             except Exception as ex:
                 with open(PATH + 'PyThom.log', 'a') as logf:
-                    logf.write("Shot {0}: error {1}\n".format(str(shot), str(ex)))
+                    logf.write("Shot {0}: error {1}, retrying...\n".format(str(pshot), str(ex)))
+                    clear_thomson_tree(shot=pshot)
+                    for vs in get_vacuum_shot_list(shot_number=pshot, log_book=log_book, number_vacuum_shots=4):
+                        clear_thomson_tree(shot=vs)
+                    try:
+                        analyze_shot(pshot)
+                        with open(PATH + 'PyThom.log', 'a') as logf:
+                            logf.write("Shot {0}: {1}\n".format(str(pshot), ' OK'))
+                    except Exception as ex:
+                        with open(PATH + 'PyThom.log', 'a') as logf:
+                            logf.write("Shot {0}: error {1}\n".format(str(pshot), str(ex)))
 
         else:
             pass
@@ -180,7 +200,8 @@ def analyze_shot(shot_number):
         var_vac = var_vac + ((var_ple)/(vac_laser_energy)**2) + var_vle*((plasma_laser_energy)**2/(vac_laser_energy)**4)
         vtree.close()
 
-
+    # Switches for saturation detection:
+    poly_saturated_YN = list([0, 0, 0, 0, 0])
 
     # Analyze all active polychromator channels
     for channel_id in channel_list:
@@ -192,6 +213,9 @@ def analyze_shot(shot_number):
         # Get the raw polychromator data:
         raw_poly_channel_sig = get_data(channel_id + '_RAW', analysis_tree)
         raw_poly_channel_t = get_dim(channel_id + '_RAW', analysis_tree)
+        if poly_saturated_YN[poly_num - 1] == 0:
+            if channel_num != 1:
+                poly_saturated_YN[poly_num - 1] = check_for_saturation(raw_poly_channel_sig)
 
         # Detrend and otherwise clean up the raw signals
         clean_poly_channel_sig = signal.savgol_filter(signal.detrend(raw_poly_channel_sig), 101, 3)
@@ -268,8 +292,10 @@ def analyze_shot(shot_number):
         for poly in poly_list:
             if poly == 2:
                 continue
-            else:
+            elif poly_saturated_YN[poly - 1] == 0:
                 poly_id = 'POLY_' + np.str(poly)
+
+                print('Shot: ' + np.str(shot_number) + ', poly. ' + np.str(poly))
                 pmdf_fixed[poly], trace_fixed[poly] = inference_button_fixed(poly_id, analysis_tree)
                 pmdf_drift[poly], trace_drift[poly] = inference_button_drift(poly_id, analysis_tree)
 
@@ -478,6 +504,10 @@ def build_shot(shot_number):
         except Exception as ex:
             raw_poly_channel_sig = get_data('TS_POLY' + channel_id[-3:], data_tree)
             raw_poly_channel_t = get_dim('TS_POLY' + channel_id[-3:], data_tree)
+            if len(raw_poly_channel_sig) > 9952:
+                raw_poly_channel_sig = raw_poly_channel_sig[24:-24]
+                raw_poly_channel_t = raw_poly_channel_t[24:-24]
+
             tree_write_safe(raw_poly_channel_sig, channel_id + '_RAW', dim=raw_poly_channel_t, tree=analysis_tree)
 
         # Set up a vacuum shot if this is a plasma shot:
@@ -985,6 +1015,7 @@ def add_node_safe(tag_name_in, tree):
     # then add appropriate nodes (recursive?) until all parent (type 'STRUCTURE') nodes are built
     try:
         tree.addNode(node_string, node_usage).addTag(tag_name_in)
+        tree.write()
     except Exception as ex:
         if ex.msgnam == 'NNF':
             print('Parent node for ' + node_string + ' not in tree, creating...')
@@ -999,7 +1030,9 @@ def add_node_safe(tag_name_in, tree):
             print(message)
             return -1
 
-    print(node_string)
+    # print(tag_name_in)
+    # print(node_string)
+    # print(tree)
     node = tree.getNode(node_string)
     node.setUsage(node_usage)
 
@@ -1229,14 +1262,21 @@ def get_vacuum_shot_list(shot_number, log_book, number_vacuum_shots):
     days_to_check = np.insert(other_days, 0, ts_today)
 
     vac_list = [str(shot) for shot in log_book['Shot'] if str(shot)[:6] == str(ts_today) and log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'V']
+
     ctr = 1
     while len(vac_list) < number_vacuum_shots and ctr < len(days_to_check):
-        vac_list = np.insert(vac_list, 1, [str(shot) for shot in log_book['Shot'] if str(shot)[:6] == str(days_to_check[ctr])
+        if len(vac_list) == 0:
+            ind_insert = 0
+        else:
+            ind_insert = 1
+
+        vac_list = np.insert(vac_list, ind_insert, [str(shot) for shot in log_book['Shot'] if str(shot)[:6] == str(days_to_check[ctr])
                                                                                     and log_book.loc[log_book.Shot == shot, 'Fuel'].array[0] == 'V'
                                                                                     and log_book.loc[log_book.Shot == shot, 'Mount_Positions'].array[0] ==
                                                                                         log_book.loc[log_book.Shot == shot_number, 'Mount_Positions'].array[0]
                                                                                     and log_book.loc[log_book.Shot == shot, 'Jack_Height'].array[0] ==
                                                                                         log_book.loc[log_book.Shot == shot_number, 'Jack_Height'].array[0]])
+        
         ctr = ctr + 1
     vac_list = [np.int(shot_str) for shot_str in vac_list]
     return vac_list[0:number_vacuum_shots]
@@ -1259,6 +1299,25 @@ def interleave(list1, list2):
             newlist.append(list2[i])
 
     return newlist
+
+
+def check_for_saturation(sig):
+    num_points = len(sig)
+    sat_window = np.int(np.around(num_points/200))
+    if sat_window < 3:
+        sat_window = 3
+
+    for start_point in np.arange(0, num_points - sat_window + 1):
+        var_now = np.var(sig[start_point:start_point + sat_window])
+        if var_now < 1e-20:
+            return(1)
+        else:
+            pass
+
+    return(0)
+
+
+
 
 
 # thomson analysis tree variable definitions:
@@ -2069,6 +2128,14 @@ class LogLikeGrad(tt.Op):
         outputs[0][0] = grads
         
 
-# analyze_shot(190516030)
-# pmdf, trace = inference_button()
-analyze_plasma()
+
+def handler(signum, frame):
+    # print "Sampling timeout"
+    raise Exception("***Sampling Timeout!***")
+
+
+
+if __name__ == '__main__':
+    # analyze_plasma(start=190501005, stop=190501008)
+
+    pass
