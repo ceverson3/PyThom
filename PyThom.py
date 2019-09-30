@@ -8,6 +8,7 @@ Created on Tue Jul  9 16:40:22 2019
 
 # imports
 import matplotlib.pyplot as plt   # plotting
+import matplotlib.ticker as ticker
 import datetime
 import scipy.signal as signal     # for signal operations like detrending, etc.
 import statsmodels.api as sm
@@ -45,8 +46,628 @@ style = 'BDA'  # 'Bayes' for Bayesian analysis or 'Ratio' for ratio evaluation m
 sns.set()   # Set the plotting theme
 
 
-def get_finished_logbook():
-    pass
+def plot_drifting_max(t_e, v_d):
+
+# 	l_domain = get_dim('CAL_5_CH_FG_POLY_3_T_1', Tree('analysis3', -1))
+    l_domain = np.arange(670e-9, 718.6e-9, 1e-12)
+    angle_scat = np.pi/2
+    beta = C_SPEED*np.sqrt(ELECTRON_MASS)/(2*RUBY_WL*np.sin(angle_scat/2)*np.sqrt(2*E_CHARGE))
+    h = np.exp(-((beta)*(l_domain - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e)
+
+    print(l_domain[np.where(h == max(h))[0][0]])
+
+    plt.plot(l_domain, h)
+    plt.show()
+
+
+def look_at(shot=None):
+#   190501012
+    g_res_dpi = 600
+    sns.set_style("ticks")
+    data = pd.read_csv('TS_analysis_logbook.csv')
+
+    if shot is None:
+        analyzed_shots = [s for s in data['Shot'] if not np.isnan(data.loc[data.Shot == s, 'POLY_3_T_e_fixed'].array[0])]
+        shot = np.int(np.random.choice(analyzed_shots))
+    print(shot)
+
+
+    analysis_tree = Tree('analysis3', shot)
+
+    i_tor_y = get_data('i_tor_spaavg', analysis_tree)
+    i_tor_t = get_dim('i_tor_spaavg', analysis_tree)
+    ind_start = np.where(i_tor_t > 0.00025)[0][0]
+    ind_stop = np.where(i_tor_t > 0.004)[0][0]
+    i_tor_t = i_tor_t[ind_start:ind_stop]
+    i_tor_y = i_tor_y[ind_start:ind_stop]
+    i_tor = np.int(data.loc[data.Shot == shot, 'i_tor_max'].array[0]/1000)
+    fire_time = data.loc[data.Shot == shot, 'FIRE_TIME'].array[0]
+    fuel = data.loc[data.Shot == shot, 'Fuel'].array[0]
+    # ft = np.where(i_tor_t >= fire_time)[0][0]
+    # data.loc[data.Shot == shot].POLY_5_T_e_drift.hist(alpha=0.3)
+    t_e_fixed_kde = {}
+    t_e_drift_kde = {}
+    v_d_drift_kde = {}
+
+    t_e_fixed = {}
+    t_e_fixed_lpd = {}
+    t_e_fixed_hpd = {}
+
+    t_e_drift = {}
+    t_e_drift_lpd = {}
+    t_e_drift_hpd = {}
+
+    v_d_drift = {}
+    v_d_drift_lpd = {}
+    v_d_drift_hpd = {}
+
+    poly_r = {}
+
+    fig = plt.figure(figsize=(7, 8))
+    # fig = plt.figure()
+    grid = plt.GridSpec(3, 1, wspace=0.3, hspace=0.3)
+    ax1 = fig.add_subplot(grid[1:2, 0])
+    ax2 = fig.add_subplot(grid[2:, 0])
+    # ax2 = ax1.twinx()
+    ax3 = fig.add_subplot(grid[0, 0])
+
+    for pp in np.arange(3,6):
+        try:
+            t_e_fixed_kde[pp] = get_data('POLY_' + np.str(pp) + '_T_E_FIXED', analysis_tree)
+            t_e_drift_kde[pp] = get_data('POLY_' + np.str(pp) + '_T_E_DRIFT', analysis_tree)
+            v_d_drift_kde[pp] = get_data('POLY_' + np.str(pp) + '_V_D_DRIFT', analysis_tree)
+        except Exception as ex:
+            print(ex.msgnam)
+            t_e_fixed_kde[pp] = np.NaN
+            t_e_drift_kde[pp] = np.NaN
+            v_d_drift_kde[pp] = np.NaN
+
+        t_e_fixed[pp] = data.loc[data.Shot == shot]['POLY_'+ np.str(pp) +'_T_e_fixed'].array[0]
+        t_e_fixed_lpd[pp] = data.loc[data.Shot == shot]['POLY_'+ np.str(pp) +'_T_e_fixed_hpd95low'].array[0]
+        t_e_fixed_hpd[pp] = data.loc[data.Shot == shot]['POLY_'+ np.str(pp) +'_T_e_fixed_hpd95high'].array[0]
+
+        t_e_drift[pp] = data.loc[data.Shot == shot]['POLY_'+ np.str(pp) +'_T_e_drift'].array[0]
+        t_e_drift_lpd[pp] = data.loc[data.Shot == shot]['POLY_'+ np.str(pp) +'_T_e_drift_hpd95low'].array[0]
+        t_e_drift_hpd[pp] = data.loc[data.Shot == shot]['POLY_'+ np.str(pp) +'_T_e_drift_hpd95high'].array[0]
+
+        v_d_drift[pp] = data.loc[data.Shot == shot]['POLY_'+ np.str(pp) +'_v_d_drift'].array[0]/1000
+        v_d_drift_lpd[pp] = data.loc[data.Shot == shot]['POLY_'+ np.str(pp) +'_v_d_drift_hpd95low'].array[0]/1000
+        v_d_drift_hpd[pp] = data.loc[data.Shot == shot]['POLY_'+ np.str(pp) +'_v_d_drift_hpd95high'].array[0]/1000
+
+        poly_r[pp] = data.loc[data.Shot == shot]['radius_poly_' + np.str(pp)].array[0]
+
+# TODO add in fuel species
+    for pp in np.arange(3,6):
+        ax1.errorbar(poly_r[pp], t_e_fixed[pp], np.array([[t_e_fixed[pp] - t_e_fixed_lpd[pp]], [t_e_fixed_hpd[pp] - t_e_fixed[pp]]]), mfc='white', fmt='bo', lw=1, capsize=3)
+        ax1.errorbar(poly_r[pp], t_e_drift[pp], np.array([[t_e_drift[pp] - t_e_drift_lpd[pp]], [t_e_drift_hpd[pp] - t_e_drift[pp]]]), mfc='white', fmt='bd', lw=1, capsize=3)
+        ax2.errorbar(poly_r[pp], v_d_drift[pp], np.array([[v_d_drift[pp] - v_d_drift_lpd[pp]], [v_d_drift_hpd[pp] - v_d_drift[pp]]]), fmt='gv', lw=1, capsize=3)
+
+    ax3.vlines(fire_time, 0, i_tor, linestyles='dashed')
+    ax3.plot(i_tor_t, i_tor_y/1000, linewidth=1)
+    ax3.legend([r'$I_{tor}$ [kA]', 'TS meas. time'])
+    ax1.set_xlabel('Maj. Radius [m]')
+    ax2.set_xlabel('Maj. Radius [m]')
+    ax3.set_xlabel('[s]')
+    ax1.set_ylabel('Temp. [eV]', color='b')
+    ax3.set_ylabel(r'$I_{tor}$ [kA]', color='b')
+    ax2.set_ylabel('Velocity [km/s]', color='g')
+    ax1.grid(linestyle=':', linewidth=0.5)
+    ax2.grid(linestyle=':', linewidth=0.5)
+    # ax1.legend([r'$T_e$  ($v_d \equiv 0$)', r'$T_e$  (drift allowed)'], loc='lower left')
+    # ax2.legend([r'$v_d$'], loc='upper right')
+    ax1.legend([r'$T_e$  ($v_d \equiv 0$)', r'$T_e$  (drift allowed)'])
+    ax2.legend([r'$v_d$'])
+    ax1.set_xlim(0.2, 0.4)
+    ax2.set_xlim(0.2, 0.4)
+    ax1.set_ylim(0,)
+    plt.title('Shot ' +  np.str(shot) + ', Fuel: ' + fuel)
+    plt.subplots_adjust(left=0.12, right=0.95, top=0.95, bottom=0.08)
+    fig.savefig('figures/' + np.str(shot) + 'profiles.svg', format='svg', dpi=g_res_dpi)
+    plt.show()
+
+    # another plot (histograms)
+    fig = plt.figure(figsize=(7, 8))
+    fig.suptitle('Shot #' + np.str(shot) + ' Posterior Distributions', fontsize=16)
+    grid = plt.GridSpec(100, 1, wspace=0.4, hspace=0.01)
+    ax1 = fig.add_subplot(grid[0:25, 0])
+    ax2 = fig.add_subplot(grid[41:66, 0])
+    ax3 = fig.add_subplot(grid[75:100, 0])
+
+# TODO add in fuel species
+    for pp in np.arange(3,6):
+        sns.kdeplot(t_e_fixed_kde[pp], ax=ax1, label=np.str(np.int(poly_r[pp]*100)) + ' cm')
+        sns.kdeplot(t_e_drift_kde[pp], ax=ax2, label=np.str(np.int(poly_r[pp]*100)) + ' cm')
+        sns.kdeplot(v_d_drift_kde[pp], ax=ax3, label=np.str(np.int(poly_r[pp]*100)) + ' cm')
+
+    # ax3.vlines(fire_time, 0, i_tor, linestyles='dashed')
+    # ax3.plot(i_tor_t, i_tor_y/1000, linewidth=1)
+    ax1.set_xlim(1.5,15)
+    ax1.set_title('Fixed Maxwellian model', fontsize=14)
+    # ax1.legend([np.str(np.int(r*100)) + ' cm' for r in list(poly_r.values())])
+    ax1.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax1.set_ylabel('P (unnormalized)', fontsize=10)
+    
+    ax2.set_xlim(1.5,15)
+    ax2.set_title('Drifting Maxwellian model', fontsize=14)
+    # ax2.legend([np.str(np.int(r*100)) + ' cm' for r in list(poly_r.values())])
+    ax2.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax2.set_ylabel('P (unnormalized)', fontsize=10)
+                   
+    # ax3.legend([np.str(np.int(r*100)) + ' cm' for r in list(poly_r.values())])
+    ax3.set_xlabel(r'$v_d$ [m/s]', fontsize=10)
+    ax3.set_ylabel('P (unnormalized)', fontsize=10)
+    ax3.yaxis.set_major_formatter(ticker.FormatStrFormatter('%0.0e'))
+    ax3.set_xlim(-450000,450000)
+    fig.savefig('figures/posteriors_' + np.str(shot) + '.svg', format='svg', dpi=g_res_dpi)
+
+    plt.show()
+
+
+def aggregate(shot=None):
+    data = pd.read_csv('TS_analysis_logbook.csv')
+    g_res_dpi = 600
+    tbins = np.arange(2,30,0.5)
+    vbins = 50
+    fuel = 'D'
+    # 190226004
+    radii = np.unique(pd.concat([data.radius_poly_3, data.radius_poly_4, data.radius_poly_5]).dropna())    
+    radii = np.r_[radii[0:2], radii[-1]]
+    
+    fig = plt.figure(figsize=(7, 8))
+    fig.suptitle("All Thomson scattering measurements", fontsize=16)
+    grid = plt.GridSpec(100, 1, wspace=0.4, hspace=0.01)
+    ax1 = fig.add_subplot(grid[0:25, 0])
+    ax2 = fig.add_subplot(grid[41:66, 0])
+    ax3 = fig.add_subplot(grid[75:100, 0])
+
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.radius_poly_3 == radii[ii])].POLY_3_T_e_fixed,
+                           data.loc[(data.radius_poly_4 == radii[ii])].POLY_4_T_e_fixed,
+                           data.loc[(data.radius_poly_5 == radii[ii])].POLY_5_T_e_fixed])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax1, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax1, color=sns.color_palette()[ii])    
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax1.set_xlim(1.5,30)
+    ax1.set_title('Fixed Maxwellian model', fontsize=14)
+    ax1.legend(leg)
+    ax1.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax1.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.radius_poly_3 == radii[ii])].POLY_3_T_e_drift,
+                           data.loc[(data.radius_poly_4 == radii[ii])].POLY_4_T_e_drift,
+                           data.loc[(data.radius_poly_5 == radii[ii])].POLY_5_T_e_drift])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax2, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax2, color=sns.color_palette()[ii])  
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax2.set_xlim(1.5,30)
+    ax2.set_title('Drifting Maxwellian model', fontsize=14)
+    ax2.legend(leg)
+    ax2.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax2.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.radius_poly_3 == radii[ii])].POLY_3_v_d_drift,
+                           data.loc[(data.radius_poly_4 == radii[ii])].POLY_4_v_d_drift,
+                           data.loc[(data.radius_poly_5 == radii[ii])].POLY_5_v_d_drift])
+        if vbins is None:
+            rhist.hist(alpha=0.5, ax=ax3, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=vbins, alpha=0.5, ax=ax3, color=sns.color_palette()[ii])  
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax3.legend(leg)
+    ax3.set_xlabel(r'$v_d$ [m/s]', fontsize=10)
+    ax3.set_ylabel('# of shots', fontsize=10)
+    ax3.set_xlim(-450000,450000)
+    fig.savefig('figures/aggregate_allshots.svg', format='svg', dpi=g_res_dpi)
+
+    
+    # new figure
+    fig = plt.figure(figsize=(7, 8))
+    fig.suptitle("Deuterium plasma", fontsize=16)
+    grid = plt.GridSpec(100, 1, wspace=0.4, hspace=0.01)
+    ax1 = fig.add_subplot(grid[0:25, 0])
+    ax2 = fig.add_subplot(grid[41:66, 0])
+    ax3 = fig.add_subplot(grid[75:100, 0])
+
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.Fuel == fuel) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_fixed,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_fixed,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_fixed])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax1, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax1, color=sns.color_palette()[ii])  
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax1.set_xlim(1.5,30)
+    ax1.set_title('Fixed Maxwellian model', fontsize=14)
+    ax1.legend(leg)
+    ax1.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax1.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.Fuel == fuel) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_drift,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_drift,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_drift])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax2, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax2, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax2.set_xlim(1.5,30)
+    ax2.set_title('Drifting Maxwellian model', fontsize=14)
+    ax2.legend(leg)
+    ax2.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax2.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.Fuel == fuel) & (data.radius_poly_3 == radii[ii])].POLY_3_v_d_drift,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_4 == radii[ii])].POLY_4_v_d_drift,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_5 == radii[ii])].POLY_5_v_d_drift])
+        if vbins is None:
+            rhist.hist(alpha=0.5, ax=ax3, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=vbins, alpha=0.5, ax=ax3, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax3.legend(leg)
+    ax3.set_xlabel(r'$v_d$ [m/s]', fontsize=10)
+    ax3.set_ylabel('# of shots', fontsize=10)
+    ax3.set_xlim(-450000,450000)
+    fig.savefig('figures/aggregate_D_only.svg', format='svg', dpi=g_res_dpi)
+
+    # new figure
+    fuel = 'D/He'
+    fig = plt.figure(figsize=(7, 8))
+    fig.suptitle("Deuterium/Helium plasma", fontsize=16)
+    grid = plt.GridSpec(100, 1, wspace=0.4, hspace=0.01)
+    ax1 = fig.add_subplot(grid[0:25, 0])
+    ax2 = fig.add_subplot(grid[41:66, 0])
+    ax3 = fig.add_subplot(grid[75:100, 0])
+
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.Fuel == fuel) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_fixed,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_fixed,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_fixed])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax1, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax1, color=sns.color_palette()[ii])    
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax1.set_xlim(1.5,30)
+    ax1.set_title('Fixed Maxwellian model', fontsize=14)
+    ax1.legend(leg)
+    ax1.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax1.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.Fuel == fuel) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_drift,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_drift,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_drift])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax2, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax2, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax2.set_xlim(1.5,30)
+    ax2.set_title('Drifting Maxwellian model', fontsize=14)
+    ax2.legend(leg)
+    ax2.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax2.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.Fuel == fuel) & (data.radius_poly_3 == radii[ii])].POLY_3_v_d_drift,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_4 == radii[ii])].POLY_4_v_d_drift,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_5 == radii[ii])].POLY_5_v_d_drift])
+        if vbins is None:
+            rhist.hist(alpha=0.5, ax=ax3, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=vbins, alpha=0.5, ax=ax3, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax3.legend(leg)
+    ax3.set_xlabel(r'$v_d$ [m/s]', fontsize=10)
+    ax3.set_ylabel('# of shots', fontsize=10)
+    ax3.set_xlim(-450000,450000)
+    fig.savefig('figures/aggregate_DHe_only.svg', format='svg', dpi=g_res_dpi)
+
+
+    # new figure
+    fuel = 'He'
+    fig = plt.figure(figsize=(7, 8))
+    fig.suptitle("Helium plasma", fontsize=16)
+    grid = plt.GridSpec(100, 1, wspace=0.4, hspace=0.01)
+    ax1 = fig.add_subplot(grid[0:25, 0])
+    ax2 = fig.add_subplot(grid[41:66, 0])
+    ax3 = fig.add_subplot(grid[75:100, 0])
+
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.Fuel == fuel) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_fixed,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_fixed,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_fixed])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax1, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax1, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax1.set_xlim(1.5,30)
+    ax1.set_title('Fixed Maxwellian model', fontsize=14)
+    ax1.legend(leg)
+    ax1.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax1.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.Fuel == fuel) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_drift,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_drift,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_drift])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax2, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax2, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax2.set_xlim(1.5,30)
+    ax2.set_title('Drifting Maxwellian model', fontsize=14)
+    ax2.legend(leg)
+    ax2.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax2.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.Fuel == fuel) & (data.radius_poly_3 == radii[ii])].POLY_3_v_d_drift,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_4 == radii[ii])].POLY_4_v_d_drift,
+                   data.loc[(data.Fuel == fuel) & (data.radius_poly_5 == radii[ii])].POLY_5_v_d_drift])
+        if vbins is None:
+            rhist.hist(alpha=0.5, ax=ax3, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=vbins, alpha=0.5, ax=ax3, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax3.legend(leg)
+    ax3.set_xlabel(r'$v_d$ [m/s]', fontsize=10)
+    ax3.set_ylabel('# of shots', fontsize=10)
+    ax3.set_xlim(-450000,450000)
+    fig.savefig('figures/aggregate_He_only.svg', format='svg', dpi=g_res_dpi)
+
+    
+    # new figure
+    fig = plt.figure(figsize=(7, 8))
+    fig.suptitle('Positive toroidal current', fontsize=16)
+    grid = plt.GridSpec(100, 1, wspace=0.4, hspace=0.01)
+    ax1 = fig.add_subplot(grid[0:25, 0])
+    ax2 = fig.add_subplot(grid[41:66, 0])
+    ax3 = fig.add_subplot(grid[75:100, 0])
+
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.i_tor_max > 0) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_fixed,
+                           data.loc[(data.i_tor_max > 0) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_fixed,
+                           data.loc[(data.i_tor_max > 0) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_fixed])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax1, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax1, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax1.set_xlim(1.5,30)
+    ax1.set_title('Fixed Maxwellian model', fontsize=14)
+    ax1.legend(leg)
+    ax1.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax1.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.i_tor_max > 0) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_drift,
+                           data.loc[(data.i_tor_max > 0) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_drift,
+                           data.loc[(data.i_tor_max > 0) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_drift])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax2, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax2, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax2.set_xlim(1.5,30)
+    ax2.set_title('Drifting Maxwellian model', fontsize=14)
+    ax2.legend(leg)
+    ax2.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax2.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.i_tor_max > 0) & (data.radius_poly_3 == radii[ii])].POLY_3_v_d_drift,
+                           data.loc[(data.i_tor_max > 0) & (data.radius_poly_4 == radii[ii])].POLY_4_v_d_drift,
+                           data.loc[(data.i_tor_max > 0) & (data.radius_poly_5 == radii[ii])].POLY_5_v_d_drift])
+        if vbins is None:
+            rhist.hist(alpha=0.5, ax=ax3, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=vbins, alpha=0.5, ax=ax3, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax3.legend(leg)
+    ax3.set_xlabel(r'$v_d$ [m/s]', fontsize=10)
+    ax3.set_ylabel('# of shots', fontsize=10)
+    ax3.set_xlim(-450000,450000)
+    fig.savefig('figures/aggregate_positive_itor_only.svg', format='svg', dpi=g_res_dpi)
+
+ 
+    # new figure
+    fig = plt.figure(figsize=(7, 8))
+    fig.suptitle('Negative toroidal current', fontsize=16)
+    grid = plt.GridSpec(100, 1, wspace=0.4, hspace=0.01)
+    ax1 = fig.add_subplot(grid[0:25, 0])
+    ax2 = fig.add_subplot(grid[41:66, 0])
+    ax3 = fig.add_subplot(grid[75:100, 0])
+
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.i_tor_max < 0) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_fixed,
+                           data.loc[(data.i_tor_max < 0) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_fixed,
+                           data.loc[(data.i_tor_max < 0) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_fixed])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax1, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax1, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax1.set_xlim(1.5,30)
+    ax1.set_title('Fixed Maxwellian model', fontsize=14)
+    ax1.legend(leg)
+    ax1.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax1.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.i_tor_max < 0) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_drift,
+                           data.loc[(data.i_tor_max < 0) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_drift,
+                           data.loc[(data.i_tor_max < 0) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_drift])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax2, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax2, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax2.set_xlim(1.5,30)
+    ax2.set_title('Drifting Maxwellian model', fontsize=14)
+    ax2.legend(leg)
+    ax2.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax2.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.i_tor_max < 0) & (data.radius_poly_3 == radii[ii])].POLY_3_v_d_drift,
+                           data.loc[(data.i_tor_max < 0) & (data.radius_poly_4 == radii[ii])].POLY_4_v_d_drift,
+                           data.loc[(data.i_tor_max < 0) & (data.radius_poly_5 == radii[ii])].POLY_5_v_d_drift])
+        if vbins is None:
+            rhist.hist(alpha=0.5, ax=ax3, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=vbins, alpha=0.5, ax=ax3, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax3.legend(leg)
+    ax3.set_xlabel(r'$v_d$ [m/s]', fontsize=10)
+    ax3.set_ylabel('# of shots', fontsize=10)
+    ax3.set_xlim(-450000,450000)
+    fig.savefig('figures/aggregate_negative_itor_only.svg', format='svg', dpi=g_res_dpi)
+
+
+    # new figure
+    time_line = 0.002
+    fig = plt.figure(figsize=(7, 8))
+    fig.suptitle(r'Spheromak decay ($t_{TS}>$' + np.str(time_line) + ' s)', fontsize=16)
+    grid = plt.GridSpec(100, 1, wspace=0.4, hspace=0.01)
+    ax1 = fig.add_subplot(grid[0:25, 0])
+    ax2 = fig.add_subplot(grid[41:66, 0])
+    ax3 = fig.add_subplot(grid[75:100, 0])
+
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.FIRE_TIME > time_line) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_fixed,
+                           data.loc[(data.FIRE_TIME > time_line) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_fixed,
+                           data.loc[(data.FIRE_TIME > time_line) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_fixed])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax1, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax1, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax1.set_xlim(1.5,30)
+    ax1.set_title('Fixed Maxwellian model', fontsize=14)
+    ax1.legend(leg)
+    ax1.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax1.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.FIRE_TIME > time_line) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_drift,
+                           data.loc[(data.FIRE_TIME > time_line) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_drift,
+                           data.loc[(data.FIRE_TIME > time_line) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_drift])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax2, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax2, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax2.set_xlim(1.5,30)
+    ax2.set_title('Drifting Maxwellian model', fontsize=14)
+    ax2.legend(leg)
+    ax2.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax2.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.FIRE_TIME > time_line) & (data.radius_poly_3 == radii[ii])].POLY_3_v_d_drift,
+                           data.loc[(data.FIRE_TIME > time_line) & (data.radius_poly_4 == radii[ii])].POLY_4_v_d_drift,
+                           data.loc[(data.FIRE_TIME > time_line) & (data.radius_poly_5 == radii[ii])].POLY_5_v_d_drift])
+        if vbins is None:
+            rhist.hist(alpha=0.5, ax=ax3, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=vbins, alpha=0.5, ax=ax3, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax3.legend(leg)
+    ax3.set_xlabel(r'$v_d$ [m/s]', fontsize=10)
+    ax3.set_ylabel('# of shots', fontsize=10)
+    ax3.set_xlim(-450000,450000)
+    fig.savefig('figures/aggregate_decay_period_only.svg', format='svg', dpi=g_res_dpi)
+
+    
+    # new figure
+    fig = plt.figure(figsize=(7, 8))
+    fig.suptitle(r'Spheromak sustainment ($t_{TS}<$' + np.str(time_line) + ' s)', fontsize=16)
+    grid = plt.GridSpec(100, 1, wspace=0.4, hspace=0.01)
+    ax1 = fig.add_subplot(grid[0:25, 0])
+    ax2 = fig.add_subplot(grid[41:66, 0])
+    ax3 = fig.add_subplot(grid[75:100, 0])
+
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.FIRE_TIME < time_line) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_fixed,
+                           data.loc[(data.FIRE_TIME < time_line) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_fixed,
+                           data.loc[(data.FIRE_TIME < time_line) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_fixed])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax1, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax1, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax1.set_xlim(1.5,30)
+    ax1.set_title('Fixed Maxwellian model', fontsize=14)
+    ax1.legend(leg)
+    ax1.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax1.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.FIRE_TIME < time_line) & (data.radius_poly_3 == radii[ii])].POLY_3_T_e_drift,
+                           data.loc[(data.FIRE_TIME < time_line) & (data.radius_poly_4 == radii[ii])].POLY_4_T_e_drift,
+                           data.loc[(data.FIRE_TIME < time_line) & (data.radius_poly_5 == radii[ii])].POLY_5_T_e_drift])
+        if tbins is None:
+            rhist.hist(alpha=0.5, ax=ax2, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=tbins, alpha=0.5, ax=ax2, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax2.set_xlim(1.5,30)
+    ax2.set_title('Drifting Maxwellian model', fontsize=14)
+    ax2.legend(leg)
+    ax2.set_xlabel(r'$T_e$ [eV]', fontsize=10)
+    ax2.set_ylabel('# of shots', fontsize=10)
+    
+    leg = list([])
+    for ii in np.arange(0,len(radii)):
+        rhist = pd.concat([data.loc[(data.FIRE_TIME < time_line) & (data.radius_poly_3 == radii[ii])].POLY_3_v_d_drift,
+                           data.loc[(data.FIRE_TIME < time_line) & (data.radius_poly_4 == radii[ii])].POLY_4_v_d_drift,
+                           data.loc[(data.FIRE_TIME < time_line) & (data.radius_poly_5 == radii[ii])].POLY_5_v_d_drift])
+        if vbins is None:
+            rhist.hist(alpha=0.5, ax=ax3, color=sns.color_palette()[ii])    
+        else:
+            rhist.hist(bins=vbins, alpha=0.5, ax=ax3, color=sns.color_palette()[ii])
+        leg.append(r'R = ' + np.str(np.int(100*radii[ii])) + ' cm (N = ' + np.str(len(rhist)) + ')')
+    ax3.legend(leg)
+    ax3.set_xlabel(r'$v_d$ [m/s]', fontsize=10)
+    ax3.set_ylabel('# of shots', fontsize=10)    
+    ax3.set_xlim(-450000,450000)
+    fig.savefig('figures/aggregate_sustainment_period_only.svg', format='svg', dpi=g_res_dpi)
 
 
 def clear_thomson_tree(shot=None):
@@ -238,7 +859,7 @@ def analyze_shot(shot_number):
         else:
             signal_voltage = np.max(clean_poly_channel_sig[scattering_window_start[poly_num - 1]:scattering_window_end[poly_num - 1]])
 
-        background_voltage = np.std(np.r_[raw_poly_channel_sig[0:scattering_window_start[poly_num - 1] - 200], raw_poly_channel_sig[0:scattering_window_end[poly_num - 1] + 1000]])
+        background_voltage = np.std(np.r_[raw_poly_channel_sig[0:scattering_window_start[poly_num - 1] - 200], raw_poly_channel_sig[scattering_window_end[poly_num - 1] + 1000:]])
 
         # Get the calibration string based on the shot number:
         cal_string = get_cal_string(shot_number, channel_id)
@@ -1998,6 +2619,7 @@ def fixed_maxwellian_loglike(theta, l_domain, data, sigma, tau, cal_var, angle_s
     return llh
 
 
+
 # define the model
 def drift_maxwellian(theta, tau, l_domain, cal_var, angle_scat):
 
@@ -2139,3 +2761,8 @@ if __name__ == '__main__':
     # analyze_plasma(start=190501005, stop=190501008)
 
     pass
+
+
+
+
+
