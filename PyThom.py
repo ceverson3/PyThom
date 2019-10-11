@@ -28,7 +28,7 @@ import theano
 import theano.tensor as tt
 from scipy.optimize import approx_fprime
 
-PLOTS_ON = 0
+PLOTS_ON = 1
 FORCE_NEW_NODES = 0
 photodiode_baseline_record_fraction = 0.15  # the fraction of the ruby photodiode record to take as the baseline
 num_vacuum_shots = 4
@@ -2595,11 +2595,12 @@ def fixed_maxwellian(theta, tau, l_domain, cal_var, angle_scat):
     # t_e, n_e, c_geom = theta  # unpack parameters
     t_e = theta  # unpack parameters
     beta = C_SPEED*np.sqrt(ELECTRON_MASS)/(2*RUBY_WL*np.sin(angle_scat/2)*np.sqrt(2*E_CHARGE))
+    l_unc = np.random.normal(0, 2e-10)
     tau_h_int = list([])
     var_spec = list([])
     for ii in np.arange(2,6):
         # ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*1e19*1e-5*np.trapz(tau[ii]*np.exp(-(beta**2)*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
-        tau_h_int.append(np.trapz(tau[ii]*np.exp(-(beta**2)*(l_domain - RUBY_WL)**2/t_e)/np.sqrt(t_e), l_domain))
+        tau_h_int.append(np.trapz(tau[ii]*np.exp(-(beta**2)*(l_domain + l_unc - RUBY_WL)**2/t_e)/np.sqrt(t_e), l_domain))
         var_spec.append(np.trapz((cal_var[ii])*(np.exp(-(beta**2)*(l_domain - RUBY_WL)**2/t_e)/np.sqrt(t_e))**2, l_domain))
 
     return np.array(tau_h_int/tau_h_int[0]), var_spec
@@ -2625,15 +2626,15 @@ def drift_maxwellian(theta, tau, l_domain, cal_var, angle_scat):
 
     # t_e, n_e, c_geom = theta  # unpack parameters
     t_e, v_d = theta  # unpack parameters
-    # TODO replace pi/4 below:
+    l_unc = np.random.normal(0, 2e-10)
     dl = np.mean(np.diff(l_domain))
     beta = C_SPEED*np.sqrt(ELECTRON_MASS)/(2*RUBY_WL*np.sin(angle_scat/2)*np.sqrt(2*E_CHARGE))
     tau_h_int = list([])
     var_spec = list([])
     for ii in np.arange(2,6):
         # ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*1e19*1e-5*np.trapz(tau[ii]*np.exp(-(beta**2)*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
-        tau_h_int.append(np.trapz(tau[ii]*np.exp(-((beta)*(l_domain - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e), l_domain))
-        var_spec.append(np.trapz((cal_var[ii])*(np.exp(-((beta)*(l_domain - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e))**2, l_domain))
+        tau_h_int.append(np.trapz(tau[ii]*np.exp(-((beta)*(l_domain + l_unc - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e), l_domain))
+        var_spec.append(np.trapz((cal_var[ii])*(np.exp(-((beta)*(l_domain + l_unc - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e))**2, l_domain))
     return np.array(tau_h_int/tau_h_int[0]), var_spec
 
 
@@ -2759,7 +2760,7 @@ def handler(signum, frame):
 
 if __name__ == '__main__':
     # analyze_plasma(start=190501005, stop=190501008)
-
+    analyze_shot(190307018)
     pass
 
 
