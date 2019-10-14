@@ -775,13 +775,9 @@ def analyze_shot(shot_number):
     # TODO write the vacuum shots to the logbook
 
     if FORCE_NEW_NODES == 1:
-        analysis_tree.deleteNode('\\ANALYSIS3::TOP.THOMSON')
-        analysis_tree.write()
+        clear_thomson_tree(shot_number)
         for shot in vacuum_shot_list:
-            vac_tree = Tree('analysis3', shot, 'EDIT')
-            vac_tree.deleteNode('\\ANALYSIS3::TOP.THOMSON')
-            vac_tree.write()
-            vac_tree.close()
+            clear_thomson_tree(shot)
 
     # Make sure the right data is in the analysis tree
     build_shot(shot_number)
@@ -878,20 +874,22 @@ def analyze_shot(shot_number):
         # Find the same quantities for the stray (vacuum) light:
         stray_voltage = np.max(vacuum_avg_clean[scattering_window_start[poly_num - 1]:scattering_window_end[poly_num - 1]])
 
-        background_stray_voltage = np.std(np.r_[vacuum_avg[0:scattering_window_start[poly_num - 1] - 200], vacuum_avg[0:scattering_window_end[poly_num - 1] + 1000]])
-
+        background_stray_voltage = np.std(np.r_[vacuum_avg[0:scattering_window_start[poly_num - 1] - 200], vacuum_avg[scattering_window_end[poly_num - 1] + 1000:]])
         # Use the voltage to find the number of photoelectrons
         n_stray = stray_voltage*pulse_width_time/(amplifier_gain*E_CHARGE*FAST_GAIN*R_FEEDBACK*(1 - np.exp(-pulse_width_time/(R_FEEDBACK*capacitance))))
         n_background_stray = background_stray_voltage*n_stray/stray_voltage
 
         n_scat = n_pe - n_stray
+        if n_scat < 0:
+            n_scat = 0
+
         tree_write_safe(n_scat, channel_id + '_N_SCAT', tree=analysis_tree)
 
         # Calculate the variances of the measured data:
         var_scale = (n_stray**2)*var_vac
-        var_pe = 4*(n_pe + n_background)
-        var_stray = 4*(n_stray + n_background_stray) + var_scale
         var_bg = 4*n_background
+        var_pe = 4*(n_pe) + var_bg
+        var_stray = 4*(n_stray + n_background_stray) + var_scale
         var_scat = var_pe + var_stray
         tree_write_safe(var_scat, channel_id + '_VAR_SCAT', tree=analysis_tree)
 
@@ -899,7 +897,22 @@ def analyze_shot(shot_number):
         var_energy = get_data('ENERGY_VAR', analysis_tree)
 
         var_poly = var_scat
-
+        if PLOTS_ON == 1:
+            try:
+                plt.figure()
+                sig_for_plot = signal.detrend(raw_poly_channel_sig)
+                plt.plot(np.arange(0, len(sig_for_plot)), sig_for_plot)
+                bg1 = sig_for_plot[0:scattering_window_start[poly_num - 1] - 200]
+                bg2 = sig_for_plot[scattering_window_end[poly_num - 1] + 1000:]
+                plt.plot(np.arange(0,len(bg1)), bg1)
+                plt.plot(np.arange(len(sig_for_plot) - len(bg2), len(sig_for_plot)), bg2)
+                plt.plot(np.arange(0, len(sig_for_plot)), background_voltage*np.ones(len(sig_for_plot)))
+                plt.show()
+    
+                # print(signal_voltage)
+                # print(background_voltage)
+            except:
+                pass
     if style == 'REM':
         pass
 
@@ -945,6 +958,8 @@ def analyze_shot(shot_number):
                 log_book.loc[log_book.Shot == shot_number, poly_id + '_v_d_drift_hpd95high'] = summary_d['hpd_97.5'][1]
                 log_book.loc[log_book.Shot == shot_number, poly_id + '_v_d_drift_Rhat'] = summary_d['Rhat'][1]
 
+            else:
+                continue
 
 
 
@@ -2446,7 +2461,7 @@ def inference_button_fixed(poly_id, tree):
     with pm.Model() as opmodel:
 
         # Priors
-        t_e = pm.Uniform('t_e', lower=1, upper=100)
+        t_e = pm.Uniform('t_e', lower=-10, upper=100)
         # n_e = pm.Uniform('n_e', lower=1e16, upper=1e23)
         # c_geom = pm.Uniform('c_geom', lower=0, upper=10)
 
@@ -2464,7 +2479,8 @@ def inference_button_fixed(poly_id, tree):
         # use a DensityDist
         pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
         # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
-        fixed_trace = pm.sample(3000, tune=9000, discard_tuned_samples=True)
+        # fixed_trace = pm.sample(3000, tune=9000, discard_tuned_samples=True)
+        fixed_trace = pm.sample(tune=5000, draws=20000, discard_tuned_samples=True, step=pm.Metropolis())
 
         # plot the traces
         pm.summary(fixed_trace)
@@ -2477,10 +2493,17 @@ def inference_button_fixed(poly_id, tree):
         # samples_pymc3_2 = np.vstack((trace['t_e'])).T
 
         if PLOTS_ON == 1:
+
+            # t_e_x = np.arange(0, 100, 0.001)
+            # t_e_y = st.norm.u(t_e_x, loc=10, scale=1000)
+
             plt.figure()
             plt.plot(np.arange(1,len(fixed_trace['t_e'])+1),fixed_trace['t_e'])
             plt.figure()
             sns.kdeplot(fixed_trace.t_e)
+            # plt.plot(t_e_x, t_e_y)
+
+
 
         return pmdf, fixed_trace
 
@@ -2544,8 +2567,8 @@ def inference_button_drift(poly_id, tree):
     with pm.Model() as opmodel:
 
         # Priors
-        t_e = pm.Uniform('t_e', lower=1, upper=100)
-        v_d = pm.Uniform('v_d', lower=-5e5, upper=5e5)
+        t_e = pm.Uniform('t_e', lower=-10, upper=100)
+        v_d = pm.Uniform('v_d', lower=-5e6, upper=5e6)
         # n_e = pm.Uniform('n_e', lower=1e16, upper=1e23)
         # c_geom = pm.Uniform('c_geom', lower=0, upper=10)
 
@@ -2563,8 +2586,8 @@ def inference_button_drift(poly_id, tree):
         # use a DensityDist
         pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
         # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
-        drift_trace = pm.sample(2000, tune=9000, discard_tuned_samples=True)
-
+        # drift_trace = pm.sample(2000, tune=9000, discard_tuned_samples=True)
+        drift_trace = pm.sample(tune=5000, draws=20000, discard_tuned_samples=True, step=pm.Metropolis())
         # plot the traces
         # pm.summary(trace)
 
@@ -2615,7 +2638,8 @@ def fixed_maxwellian_loglike(theta, l_domain, data, sigma, tau, cal_var, angle_s
     model, var_spec = fixed_maxwellian(theta, tau, l_domain, cal_var, angle_scat)
     # model = np.flipud(model)
     # print(data)
-    llh = -0.5*np.log((1/(np.sqrt(2*np.pi)**len(sigma)*np.prod(np.sqrt(sigma**2)))))*np.sum((data - model)**2/((sigma**2 + var_spec)))
+    llh = -0.5*np.log((1/(np.sqrt(2*np.pi)**len(sigma)*np.prod(np.sqrt(sigma**2 + var_spec)))))*np.sum((data - model)**2/((sigma**2 + var_spec)))
+
     # print(llh)
     return llh
 
@@ -2647,7 +2671,7 @@ def drift_maxwellian_loglike(theta, l_domain, data, sigma, tau, cal_var, angle_s
     model, var_spec = drift_maxwellian(theta, tau, l_domain, cal_var, angle_scat)
     # model = np.flipud(model)
     # print(data)
-    llh = -0.5*np.log((1/(np.sqrt(2*np.pi)**len(sigma)*np.prod(np.sqrt(sigma**2)))))*np.sum((data - model)**2/((sigma**2 + var_spec)))
+    llh = -0.5*np.log((1/(np.sqrt(2*np.pi)**len(sigma)*np.prod(np.sqrt(sigma**2 + var_spec)))))*np.sum((data - model)**2/((sigma**2 + var_spec)))
     # print(llh)
     return llh
 
@@ -2746,7 +2770,7 @@ class LogLikeGrad(tt.Op):
 
         # calculate gradients
         # grads = gradients(theta, lnlike)
-        grads = approx_fprime(theta, lnlike, epsilon=1e-9)
+        grads = approx_fprime(theta, lnlike, epsilon=1e-12)
 
         outputs[0][0] = grads
         
@@ -2760,7 +2784,7 @@ def handler(signum, frame):
 
 if __name__ == '__main__':
     # analyze_plasma(start=190501005, stop=190501008)
-    analyze_shot(190307018)
+    analyze_shot(181010023)
     pass
 
 
