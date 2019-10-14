@@ -28,8 +28,9 @@ import theano
 import theano.tensor as tt
 from scipy.optimize import approx_fprime
 
-PLOTS_ON = 1
+PLOTS_ON = 0
 FORCE_NEW_NODES = 0
+CHECK_RAW = 0
 photodiode_baseline_record_fraction = 0.15  # the fraction of the ruby photodiode record to take as the baseline
 num_vacuum_shots = 4
 FAST_GAIN = 1
@@ -897,7 +898,7 @@ def analyze_shot(shot_number):
         var_energy = get_data('ENERGY_VAR', analysis_tree)
 
         var_poly = var_scat
-        if PLOTS_ON == 1:
+        if CHECK_RAW == 1:
             try:
                 plt.figure()
                 sig_for_plot = signal.detrend(raw_poly_channel_sig)
@@ -977,7 +978,6 @@ def analyze_shot(shot_number):
     # calculate and store the electron energy distribution function,
     # including temperature, density, and electron drift velocity
 
-    # first calculate the
 
 
     # Get the vacuum shot to use for stray light background subtraction, using an average of every vacuum shot from the
@@ -2479,8 +2479,8 @@ def inference_button_fixed(poly_id, tree):
         # use a DensityDist
         pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
         # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
-        # fixed_trace = pm.sample(3000, tune=9000, discard_tuned_samples=True)
-        fixed_trace = pm.sample(tune=5000, draws=20000, discard_tuned_samples=True, step=pm.Metropolis())
+        fixed_trace = pm.sample(3000, tune=9000, discard_tuned_samples=True)
+        # fixed_trace = pm.sample(tune=5000, draws=20000, discard_tuned_samples=True, step=pm.Metropolis())
 
         # plot the traces
         pm.summary(fixed_trace)
@@ -2578,7 +2578,7 @@ def inference_button_drift(poly_id, tree):
 
         # Sampler
 
-        step = pm.NUTS(target_accept=0.9)
+        # step = pm.NUTS(target_accept=0.9)
         # step = pm.NUTS(target_accept=0.5)
         # step = pm.Metropolis()
         # step = None
@@ -2626,7 +2626,7 @@ def fixed_maxwellian(theta, tau, l_domain, cal_var, angle_scat):
         tau_h_int.append(np.trapz(tau[ii]*np.exp(-(beta**2)*(l_domain + l_unc - RUBY_WL)**2/t_e)/np.sqrt(t_e), l_domain))
         var_spec.append(np.trapz((cal_var[ii])*(np.exp(-(beta**2)*(l_domain - RUBY_WL)**2/t_e)/np.sqrt(t_e))**2, l_domain))
 
-    return np.array(tau_h_int/tau_h_int[0]), var_spec
+    return np.array(tau_h_int/(tau_h_int[0] + 1e-30)), var_spec
 
 
 # define the likelihood function
@@ -2659,7 +2659,7 @@ def drift_maxwellian(theta, tau, l_domain, cal_var, angle_scat):
         # ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*1e19*1e-5*np.trapz(tau[ii]*np.exp(-(beta**2)*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
         tau_h_int.append(np.trapz(tau[ii]*np.exp(-((beta)*(l_domain + l_unc - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e), l_domain))
         var_spec.append(np.trapz((cal_var[ii])*(np.exp(-((beta)*(l_domain + l_unc - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e))**2, l_domain))
-    return np.array(tau_h_int/tau_h_int[0]), var_spec
+    return np.array(tau_h_int/(tau_h_int[0] + 1e-30)), var_spec
 
 
 # define the likelihood function
@@ -2773,18 +2773,11 @@ class LogLikeGrad(tt.Op):
         grads = approx_fprime(theta, lnlike, epsilon=1e-12)
 
         outputs[0][0] = grads
-        
-
-
-def handler(signum, frame):
-    # print "Sampling timeout"
-    raise Exception("***Sampling Timeout!***")
-
 
 
 if __name__ == '__main__':
     # analyze_plasma(start=190501005, stop=190501008)
-    analyze_shot(181010023)
+    analyze_shot(190307018)
     pass
 
 
