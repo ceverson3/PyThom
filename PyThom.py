@@ -27,8 +27,9 @@ import pymc3 as pm
 import theano
 import theano.tensor as tt
 from scipy.optimize import approx_fprime
+import theano.tests.unittest_tools
 
-PLOTS_ON = 0
+PLOTS_ON = 1
 FORCE_NEW_NODES = 0
 CHECK_RAW = 0
 photodiode_baseline_record_fraction = 0.15  # the fraction of the ruby photodiode record to take as the baseline
@@ -819,7 +820,7 @@ def analyze_shot(shot_number):
         vtree.close()
 
     # Switches for saturation detection:
-    poly_saturated_YN = list([0, 0, 0, 0, 0])
+    # poly_saturated_YN = list([0, 0, 0, 0, 0])
 
     # Analyze all active polychromator channels
     for channel_id in channel_list:
@@ -831,21 +832,29 @@ def analyze_shot(shot_number):
         # Get the raw polychromator data:
         raw_poly_channel_sig = get_data(channel_id + '_RAW', analysis_tree)
         raw_poly_channel_t = get_dim(channel_id + '_RAW', analysis_tree)
-        if poly_saturated_YN[poly_num - 1] == 0:
-            if channel_num != 1:
-                poly_saturated_YN[poly_num - 1] = check_for_saturation(raw_poly_channel_sig)
-
+        
+        # Get the vacuum shot:
+        # Average the closest previous/subsequent comparable vacuum shots with their energies scaled, checking first
+        # and putting the vacuum shot in the tree if necessary
+        vacuum_avg = get_data(channel_id + '_VAC', analysis_tree)
+        vacuum_avg_clean = signal.savgol_filter(signal.detrend(vacuum_avg), 101, 3)        
+                
+        # if poly_saturated_YN[poly_num - 1] == 0:
+        #     if channel_num != 1:
+        #         poly_saturated_YN[poly_num - 1] = check_for_saturation(raw_poly_channel_sig)
+        if channel_num == 1:
+            tree_write_safe(1, channel_id + '_SAT', tree=analysis_tree)
+        else:
+            tree_write_safe(check_for_saturation(raw_poly_channel_sig), channel_id + '_SAT', tree=analysis_tree)
+        
+        
         # Detrend and otherwise clean up the raw signals
         clean_poly_channel_sig = signal.savgol_filter(signal.detrend(raw_poly_channel_sig), 101, 3)
         clean_poly_channel_t = raw_poly_channel_t
         dt = np.mean(np.diff(raw_poly_channel_t))
         tree_write_safe(clean_poly_channel_sig, channel_id + '_SIG', dim=clean_poly_channel_t, tree=analysis_tree)
 
-        # Get the vacuum shot:
-        # Average the closest previous/subsequent comparable vacuum shots with their energies scaled, checking first
-        # and putting the vacuum shot in the tree if necessary
-        vacuum_avg = get_data(channel_id + '_VAC', analysis_tree)
-        vacuum_avg_clean = signal.savgol_filter(signal.detrend(vacuum_avg), 101, 3)
+
 
 
         # Find the signal voltage and the standard deviation signal voltage of the background
@@ -927,7 +936,8 @@ def analyze_shot(shot_number):
         for poly in poly_list:
             if poly == 2:
                 continue
-            elif poly_saturated_YN[poly - 1] == 0:
+            # elif poly_saturated_YN[poly - 1] == 0:
+            else:
                 poly_id = 'POLY_' + np.str(poly)
 
                 print('Shot: ' + np.str(shot_number) + ', poly. ' + np.str(poly))
@@ -945,6 +955,9 @@ def analyze_shot(shot_number):
                 tree_write_safe(np.array(pmdf_drift[poly].v_d), poly_id + '_V_D_DRIFT', np.arange(1,len(pmdf_drift[poly].v_d)+1), tree=analysis_tree)
 
                 log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_fixed'] = summary_f['mean'][0]
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_fixed_sd'] = summary_f['sd'][0]
+                log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_fixed_mc_error'] = summary_f['mc_error'][0]
+
                 log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_fixed_hpd95low'] = summary_f['hpd_2.5'][0]
                 log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_fixed_hpd95high'] = summary_f['hpd_97.5'][0]
                 log_book.loc[log_book.Shot == shot_number, poly_id + '_T_e_fixed_Rhat'] = summary_f['Rhat'][0]
@@ -959,8 +972,8 @@ def analyze_shot(shot_number):
                 log_book.loc[log_book.Shot == shot_number, poly_id + '_v_d_drift_hpd95high'] = summary_d['hpd_97.5'][1]
                 log_book.loc[log_book.Shot == shot_number, poly_id + '_v_d_drift_Rhat'] = summary_d['Rhat'][1]
 
-            else:
-                continue
+            # else:
+            #     continue
 
 
 
@@ -1382,7 +1395,7 @@ def get_spot_geometry(fiber_mount_string_in, jack_height_in):
 
     geom_dataframe = pd.DataFrame(columns=['polychromator', 'LENGTH', 'R', 'PHI', 'Z',
                                            'R_POS', 'R_NEG', 'Z_POS', 'Z_NEG',
-                                           'THETA', 'SOLID_ANGLE'])
+                                           'THETA', 'SOLID_ANGLE', 'K_R', 'K_PHI', 'K_Z'])
 
     polychromator = 0
     for fiber_mount_character in fiber_mount_list:
@@ -1422,12 +1435,35 @@ def get_spot_geometry(fiber_mount_string_in, jack_height_in):
         solid_angle = area_lens/r_scattering_vector**2
         f_number = r_scattering_vector/(window_diameter_cm)
 
+        # scattering vector:
+        k_s_r = np.cos(theta)*(np.cos(np.pi - np.arcsin(r_laser/r)))
+        k_s_phi = -1*np.cos(theta)*(r_laser/r)
+        k_s_z = np.sin(theta)
+
+        # incident vector:
+        k_i_r = np.cos(np.pi - np.arcsin(r_laser/r))
+        k_i_phi = -1*(r_laser/r)
+        k_i_z = 0
+
+        # print(np.sqrt(k_s_r**2 + k_s_phi**2 + k_s_z**2))
+        # print(np.sqrt(k_i_r**2 + k_i_phi**2 + k_i_z**2))
+
+        # total doppler shift vector k = k_s - k_i:
+        k_r = k_s_r - k_i_r
+        k_phi = k_s_phi - k_i_phi
+        k_z = k_s_z - k_i_z
+        k_l = np.sqrt(k_r**2 + k_phi**2 + k_z**2)
+        k_r = k_r/k_l
+        k_phi = k_phi/k_l
+        k_z = k_z/k_l
+
+        # report in [m]
         geom_dataframe = pd.concat([geom_dataframe, pd.DataFrame(data=[[polychromator, length/100, r/100, phi, z/100,
                                                                        r_pos/100, r_neg/100, z_pos/100, z_neg/100,
-                                                                       theta, solid_angle]],
+                                                                       theta, solid_angle, k_r, k_phi, k_z]],
                                                                  columns=['polychromator', 'LENGTH', 'R', 'PHI', 'Z',
                                                                           'R_POS', 'R_NEG', 'Z_POS', 'Z_NEG',
-                                                                          'THETA', 'SOLID_ANGLE'])],
+                                                                          'THETA', 'SOLID_ANGLE', 'K_R', 'K_PHI', 'K_Z'])],
                                                                  ignore_index=True, sort=False)
 
         # TODO: add TS scattering parameter to the returned values
@@ -1868,12 +1904,46 @@ def quantum_efficiency(l_meters):
     # EG&G model C30956E Si-APD detectors
     # takes in lambda in [m]
     # outputs QE in fraction of 1
-    l_meters = l_meters*10**9
-    Q = (-9.167*10**-5)*l_meters**2 + 0.23855*l_meters - 46.722
+    l_nm = l_meters*10**9
+    Q = (-9.167*10**-5)*l_nm**2 + 0.23855*l_nm - 46.722
     Q = Q/100
 
     return Q
 
+
+def window_correction(l_meters, minavgmax):
+    # Spectral signature of the window, as measured by SPRED3
+    # takes in lambda in [m] **ONLY VALID FOR WAVELENGTHS BETWEEN 675 AND 710 nm**
+    # outputs transmission in fraction of 1
+    l_nm = l_meters*10**9
+    if minavgmax == -1:
+        T_ret = -0.00044628*l_nm + 0.95572
+    elif minavgmax == 0:
+        T_ret = 0.00049617*l_nm + 0.33436
+    elif minavgmax == 1:
+        T_ret = 0.0013479*l_nm - 0.15607
+    else:
+        print('***ERROR in window_correction***')
+        return(np.NaN)
+
+    return T_ret
+
+def polarizer_correction(l_meters, minavgmax):
+    # Spectral signature of the polarizing filter, as measured by SPRED3
+    # takes in lambda in [m] **ONLY VALID FOR WAVELENGTHS BETWEEN 675 AND 710 nm**
+    # outputs transmission in fraction of 1
+    l_nm = l_meters*10**9
+    if minavgmax == -1:
+        T_ret = 5.1111e-05*l_nm + 0.18994
+    elif minavgmax == 0:
+        T_ret = 0.00021592*l_nm + 0.091641
+    elif minavgmax == 1:
+        T_ret = 0.00034135*l_nm + 0.010499
+    else:
+        print('***ERROR in polarizer_correction***')
+        return(np.NaN)
+
+    return T_ret
 
 def get_vacuum_shot_list(shot_number, log_book, number_vacuum_shots):
     """
@@ -2092,6 +2162,9 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_1_Z_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:Z_POS', 'NUMERIC', 'm', ''],
                                          ['POLY_1_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_1_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
+                                         ['POLY_1_K_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:K_R', 'NUMERIC', 'm^-1', ''],
+                                         ['POLY_1_K_PHI', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:K_PHI', 'NUMERIC', 'm^-1', ''],
+                                         ['POLY_1_K_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.GEOMETRY:K_Z', 'NUMERIC', 'm^-1', ''],
                                          ['POLY_1_T_E_FIXED', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.BAYES:T_E_FIXED', 'SIGNAL', 'eV', ''],
                                          ['POLY_1_T_E_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.BAYES:T_E_DRIFT', 'SIGNAL', 'eV', ''],
                                          ['POLY_1_V_D_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.BAYES:V_D_DRIFT', 'SIGNAL', 'm/s', ''],
@@ -2105,6 +2178,9 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_2_Z_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:Z_POS', 'NUMERIC', 'm', ''],
                                          ['POLY_2_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_2_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
+                                         ['POLY_2_K_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:K_R', 'NUMERIC', 'm^-1', ''],
+                                         ['POLY_2_K_PHI', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:K_PHI', 'NUMERIC', 'm^-1', ''],
+                                         ['POLY_2_K_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:K_Z', 'NUMERIC', 'm^-1', ''],
                                          ['POLY_2_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
                                          ['POLY_2_T_E_FIXED', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.BAYES:T_E_FIXED', 'SIGNAL', 'eV', ''],
                                          ['POLY_2_T_E_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.BAYES:T_E_DRIFT', 'SIGNAL', 'eV', ''],
@@ -2118,6 +2194,9 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_3_Z_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:Z_POS', 'NUMERIC', 'm', ''],
                                          ['POLY_3_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_3_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
+                                         ['POLY_3_K_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:K_R', 'NUMERIC', 'm^-1', ''],
+                                         ['POLY_3_K_PHI', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:K_PHI', 'NUMERIC', 'm^-1', ''],
+                                         ['POLY_3_K_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:K_Z', 'NUMERIC', 'm^-1', ''],
                                          ['POLY_3_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
                                          ['POLY_3_T_E_FIXED', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.BAYES:T_E_FIXED', 'SIGNAL', 'eV', ''],
                                          ['POLY_3_T_E_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.BAYES:T_E_DRIFT', 'SIGNAL', 'eV', ''],
@@ -2131,6 +2210,9 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_4_Z_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:Z_POS', 'NUMERIC', 'm', ''],
                                          ['POLY_4_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_4_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
+                                         ['POLY_4_K_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:K_R', 'NUMERIC', 'm^-1', ''],
+                                         ['POLY_4_K_PHI', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:K_PHI', 'NUMERIC', 'm^-1', ''],
+                                         ['POLY_4_K_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:K_Z', 'NUMERIC', 'm^-1', ''],
                                          ['POLY_4_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
                                          ['POLY_4_T_E_FIXED', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.BAYES:T_E_FIXED', 'SIGNAL', 'eV', ''],
                                          ['POLY_4_T_E_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.BAYES:T_E_DRIFT', 'SIGNAL', 'eV', ''],
@@ -2144,6 +2226,9 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_5_Z_POS', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:Z_POS', 'NUMERIC', 'm', ''],
                                          ['POLY_5_Z_NEG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:Z_NEG', 'NUMERIC', 'm', ''],
                                          ['POLY_5_THETA', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:THETA', 'NUMERIC', 'm', ''],
+                                         ['POLY_5_K_R', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:K_R', 'NUMERIC', 'm^-1', ''],
+                                         ['POLY_5_K_PHI', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:K_PHI', 'NUMERIC', 'm^-1', ''],
+                                         ['POLY_5_K_Z', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:K_Z', 'NUMERIC', 'm^-1', ''],
                                          ['POLY_5_SOLID_ANGLE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.GEOMETRY:SOLID_ANGLE', 'NUMERIC', 'm', ''],
                                          ['POLY_5_T_E_FIXED', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.BAYES:T_E_FIXED', 'SIGNAL', 'eV', ''],
                                          ['POLY_5_T_E_DRIFT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.BAYES:T_E_DRIFT', 'SIGNAL', 'eV', ''],
@@ -2197,7 +2282,7 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_5_3_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAC:CHANNEL_3', 'SIGNAL', 'V', 's'],
                                          ['POLY_5_4_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAC:CHANNEL_4', 'SIGNAL', 'V', 's'],
                                          ['POLY_5_5_VAC', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.VAC:CHANNEL_5', 'SIGNAL', 'V', 's'],
-                                         ['POLY_1_1_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.VAC:CHANNEL_1', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_1_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SIG:CHANNEL_1', 'SIGNAL', 'V', 's'],
                                          ['POLY_1_2_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SIG:CHANNEL_2', 'SIGNAL', 'V', 's'],
                                          ['POLY_1_3_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SIG:CHANNEL_3', 'SIGNAL', 'V', 's'],
                                          ['POLY_1_4_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SIG:CHANNEL_4', 'SIGNAL', 'V', 's'],
@@ -2222,6 +2307,31 @@ thomson_tree_lookup = pd.DataFrame(data=[['CAL_3_CH_POLY_1_T_1', 'ANALYSIS3::TOP
                                          ['POLY_5_3_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SIG:CHANNEL_3', 'SIGNAL', 'V', 's'],
                                          ['POLY_5_4_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SIG:CHANNEL_4', 'SIGNAL', 'V', 's'],
                                          ['POLY_5_5_SIG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SIG:CHANNEL_5', 'SIGNAL', 'V', 's'],
+                                         ['POLY_1_1_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_1_2_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_1_3_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_1_4_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SAT:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_1_5_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.SAT:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_2_1_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.SAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_2_2_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.SAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_2_3_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.SAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_2_4_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.SAT:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_2_5_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_2.SAT:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_3_1_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.SAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_3_2_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.SAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_3_3_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.SAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_3_4_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.SAT:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_3_5_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_3.SAT:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_4_1_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.SAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_4_2_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.SAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_4_3_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.SAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_4_4_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.SAT:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_4_5_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_4.SAT:CHANNEL_5', 'NUMERIC', '', ''],
+                                         ['POLY_5_1_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SAT:CHANNEL_1', 'NUMERIC', '', ''],
+                                         ['POLY_5_2_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SAT:CHANNEL_2', 'NUMERIC', '', ''],
+                                         ['POLY_5_3_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SAT:CHANNEL_3', 'NUMERIC', '', ''],
+                                         ['POLY_5_4_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SAT:CHANNEL_4', 'NUMERIC', '', ''],
+                                         ['POLY_5_5_SAT', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_5.SAT:CHANNEL_5', 'NUMERIC', '', ''],
                                          ['POLY_1_1_N_PE', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_PE:CHANNEL_1', 'NUMERIC', '', ''],
                                          ['POLY_1_1_N_STRAY', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_STRAY:CHANNEL_1', 'NUMERIC', '', ''],
                                          ['POLY_1_1_N_BG', 'ANALYSIS3::TOP.THOMSON.MEASUREMENTS.POLY_1.N_BG:CHANNEL_1', 'NUMERIC', '', ''],
@@ -2437,16 +2547,23 @@ def inference_button_fixed(poly_id, tree):
     node = analysis_tree.getNode('THOMSON.MEASUREMENTS.' + poly_id + '.N_SCAT')
     angle_scat = get_data(poly_id + '_THETA', analysis_tree)
 
-    channels = np.arange(2, node.getNumDescendants() + 1)
+    channels = np.arange(1, node.getNumDescendants() + 1)
     var_str = poly_id + '_Q_VAR_SCAT'
+    sat_ctr = 0
     for channel in channels:
-        cal_str = get_cal_string(analysis_tree.shot, poly_id + '_' + np.str(channel))
-
-        cal_var[channel] = get_data(cal_str.replace('TYPE?', 'V'), analysis_tree)
-        l_domain[channel] = get_dim(cal_str.replace('TYPE?', 'T'), analysis_tree)
-        tau[channel] = quantum_efficiency(l_domain[channel])*get_data(cal_str.replace('TYPE?', 'T'), analysis_tree)
-        var_scat.append(get_data(var_str.replace('Q', np.str(channel)), analysis_tree))
-        N_scat.append(get_data(poly_id + '_' + np.str(channel) + '_N_SCAT', analysis_tree))
+        channel_index = channel - sat_ctr
+        if get_data(poly_id + '_' + np.str(channel) + '_SAT', analysis_tree) == 0:
+            
+            cal_str = get_cal_string(analysis_tree.shot, poly_id + '_' + np.str(channel))
+    
+            cal_var[channel_index] = get_data(cal_str.replace('TYPE?', 'V'), analysis_tree)
+            l_domain[channel_index] = get_dim(cal_str.replace('TYPE?', 'T'), analysis_tree)
+            corr_fac = polarizer_correction(l_domain[channel_index], minavgmax=0)*window_correction(l_domain[channel_index], minavgmax=0)
+            tau[channel_index] = corr_fac*quantum_efficiency(l_domain[channel_index])*get_data(cal_str.replace('TYPE?', 'T'), analysis_tree)
+            var_scat.append(get_data(var_str.replace('Q', np.str(channel)), analysis_tree))
+            N_scat.append(get_data(poly_id + '_' + np.str(channel) + '_N_SCAT', analysis_tree))
+        else:
+            sat_ctr = sat_ctr + 1
 
     var_in = np.array(var_scat)
     N_in = np.array(N_scat)
@@ -2479,8 +2596,8 @@ def inference_button_fixed(poly_id, tree):
         # use a DensityDist
         pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
         # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
-        fixed_trace = pm.sample(3000, tune=9000, discard_tuned_samples=True)
-        # fixed_trace = pm.sample(tune=5000, draws=20000, discard_tuned_samples=True, step=pm.Metropolis())
+        # fixed_trace = pm.sample(3000, tune=9000, discard_tuned_samples=True)
+        fixed_trace = pm.sample(tune=5000, draws=20000, discard_tuned_samples=True, step=pm.Metropolis())
 
         # plot the traces
         pm.summary(fixed_trace)
@@ -2489,6 +2606,7 @@ def inference_button_fixed(poly_id, tree):
         # pm.save_trace(trace, 'home/everson/Dropbox/PyThom/traces/fixed' + np.str(analysis_tree.shot) + poly_id)
 
         # pm.summary(trace)
+        print(pm.summary(fixed_trace).to_string())
 
         # samples_pymc3_2 = np.vstack((trace['t_e'])).T
 
@@ -2540,17 +2658,24 @@ def inference_button_drift(poly_id, tree):
     node = analysis_tree.getNode('THOMSON.MEASUREMENTS.' + poly_id + '.N_SCAT')
     angle_scat = get_data(poly_id + '_THETA', analysis_tree)
 
-    channels = np.arange(2, node.getNumDescendants() + 1)
+    channels = np.arange(1, node.getNumDescendants() + 1)
     var_str = poly_id + '_Q_VAR_SCAT'
+
+    sat_ctr = 0
     for channel in channels:
-        cal_str = get_cal_string(analysis_tree.shot, poly_id + '_' + np.str(channel))
-
-        cal_var[channel] = get_data(cal_str.replace('TYPE?', 'V'), analysis_tree)
-        l_domain[channel] = get_dim(cal_str.replace('TYPE?', 'T'), analysis_tree)
-        tau[channel] = quantum_efficiency(l_domain[channel])*get_data(cal_str.replace('TYPE?', 'T'), analysis_tree)
-        var_scat.append(get_data(var_str.replace('Q', np.str(channel)), analysis_tree))
-        N_scat.append(get_data(poly_id + '_' + np.str(channel) + '_N_SCAT', analysis_tree))
-
+        channel_index = channel - sat_ctr
+        if get_data(poly_id + '_' + np.str(channel) + '_SAT', analysis_tree) == 0:
+            
+            cal_str = get_cal_string(analysis_tree.shot, poly_id + '_' + np.str(channel))
+    
+            cal_var[channel_index] = get_data(cal_str.replace('TYPE?', 'V'), analysis_tree)
+            l_domain[channel_index] = get_dim(cal_str.replace('TYPE?', 'T'), analysis_tree)
+            corr_fac = polarizer_correction(l_domain[channel_index], minavgmax=0)*window_correction(l_domain[channel_index], minavgmax=0)
+            tau[channel_index] = corr_fac*quantum_efficiency(l_domain[channel_index])*get_data(cal_str.replace('TYPE?', 'T'), analysis_tree)
+            var_scat.append(get_data(var_str.replace('Q', np.str(channel)), analysis_tree))
+            N_scat.append(get_data(poly_id + '_' + np.str(channel) + '_N_SCAT', analysis_tree))
+        else:
+            sat_ctr = sat_ctr + 1
 
     var_in = np.array(var_scat)
     N_in = np.array(N_scat)
@@ -2593,7 +2718,8 @@ def inference_button_drift(poly_id, tree):
 
         pmdf = pm.trace_to_dataframe(drift_trace)
 
-        pm.summary(drift_trace)
+        print(pm.summary(drift_trace).to_string())
+        
         # pm.save_trace(trace, 'home/everson/Dropbox/PyThom/traces/drift' + np.str(analysis_tree.shot) + poly_id)
         # sns.kdeplot(pmdf.t_e)
 
@@ -2621,10 +2747,11 @@ def fixed_maxwellian(theta, tau, l_domain, cal_var, angle_scat):
     l_unc = np.random.normal(0, 2e-10)
     tau_h_int = list([])
     var_spec = list([])
-    for ii in np.arange(2,6):
+    h_fm = np.exp(-(beta**2)*(l_domain + l_unc - RUBY_WL)**2/t_e)/np.sqrt(t_e)
+    for ii in np.arange(1,len(tau) + 1):
         # ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*1e19*1e-5*np.trapz(tau[ii]*np.exp(-(beta**2)*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
-        tau_h_int.append(np.trapz(tau[ii]*np.exp(-(beta**2)*(l_domain + l_unc - RUBY_WL)**2/t_e)/np.sqrt(t_e), l_domain))
-        var_spec.append(np.trapz((cal_var[ii])*(np.exp(-(beta**2)*(l_domain - RUBY_WL)**2/t_e)/np.sqrt(t_e))**2, l_domain))
+        tau_h_int.append(np.trapz(tau[ii]*h_fm, l_domain))
+        var_spec.append(np.trapz((cal_var[ii])*(h_fm)**2, l_domain))
 
     return np.array(tau_h_int/(tau_h_int[0] + 1e-30)), var_spec
 
@@ -2655,10 +2782,11 @@ def drift_maxwellian(theta, tau, l_domain, cal_var, angle_scat):
     beta = C_SPEED*np.sqrt(ELECTRON_MASS)/(2*RUBY_WL*np.sin(angle_scat/2)*np.sqrt(2*E_CHARGE))
     tau_h_int = list([])
     var_spec = list([])
-    for ii in np.arange(2,6):
+    h_dm = np.exp(-((beta)*(l_domain + l_unc - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e)
+    for ii in np.arange(1,len(tau) + 1):
         # ret.append((SIGMA_TS/h_PLANCK)*np.sqrt(ELECTRON_MASS/(2*np.pi*E_CHARGE))*1e19*1e-5*np.trapz(tau[ii]*np.exp(-(beta**2)*(l - RUBY_WL)**2/t_e)/np.sqrt(t_e), l))
-        tau_h_int.append(np.trapz(tau[ii]*np.exp(-((beta)*(l_domain + l_unc - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e), l_domain))
-        var_spec.append(np.trapz((cal_var[ii])*(np.exp(-((beta)*(l_domain + l_unc - RUBY_WL) - v_d*np.sqrt(ELECTRON_MASS/(2*E_CHARGE)))**2/t_e)/np.sqrt(t_e))**2, l_domain))
+        tau_h_int.append(np.trapz(tau[ii]*h_dm, l_domain))
+        var_spec.append(np.trapz((cal_var[ii])*(h_dm)**2, l_domain))
     return np.array(tau_h_int/(tau_h_int[0] + 1e-30)), var_spec
 
 
@@ -2770,14 +2898,16 @@ class LogLikeGrad(tt.Op):
 
         # calculate gradients
         # grads = gradients(theta, lnlike)
-        grads = approx_fprime(theta, lnlike, epsilon=1e-12)
+        grads = approx_fprime(theta, lnlike, epsilon=1)
+        # grads = approx_fprime(theta, lnlike, epsilon=100)
+        
 
         outputs[0][0] = grads
 
 
 if __name__ == '__main__':
     # analyze_plasma(start=190501005, stop=190501008)
-    analyze_shot(190307018)
+    analyze_shot(190516017)
     pass
 
 
