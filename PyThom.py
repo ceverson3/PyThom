@@ -2578,7 +2578,7 @@ def inference_button_fixed(poly_id, tree):
     with pm.Model() as opmodel:
 
         # Priors
-        t_e = pm.Uniform('t_e', lower=-10, upper=100)
+        t_e = pm.Uniform('t_e', lower=0.025, upper=100)
         # n_e = pm.Uniform('n_e', lower=1e16, upper=1e23)
         # c_geom = pm.Uniform('c_geom', lower=0, upper=10)
 
@@ -2597,7 +2597,7 @@ def inference_button_fixed(poly_id, tree):
         pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
         # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
         # fixed_trace = pm.sample(3000, tune=9000, discard_tuned_samples=True)
-        fixed_trace = pm.sample(tune=5000, draws=20000, discard_tuned_samples=True, step=pm.Metropolis())
+        fixed_trace = pm.sample(tune=5000, draws=8000, discard_tuned_samples=True, step=pm.Metropolis())
 
         # plot the traces
         pm.summary(fixed_trace)
@@ -2692,7 +2692,7 @@ def inference_button_drift(poly_id, tree):
     with pm.Model() as opmodel:
 
         # Priors
-        t_e = pm.Uniform('t_e', lower=-10, upper=100)
+        t_e = pm.Uniform('t_e', lower=0.025, upper=100)
         v_d = pm.Uniform('v_d', lower=-5e6, upper=5e6)
         # n_e = pm.Uniform('n_e', lower=1e16, upper=1e23)
         # c_geom = pm.Uniform('c_geom', lower=0, upper=10)
@@ -2712,7 +2712,7 @@ def inference_button_drift(poly_id, tree):
         pm.DensityDist('likelihood', lambda v: logl(v), observed={'v': theta})
         # trace = pm.sample(10000, step, tune=5000, discard_tuned_samples=True)
         # drift_trace = pm.sample(2000, tune=9000, discard_tuned_samples=True)
-        drift_trace = pm.sample(tune=5000, draws=20000, discard_tuned_samples=True, step=pm.Metropolis())
+        drift_trace = pm.sample(tune=5000, draws=10000, discard_tuned_samples=True, step=pm.Metropolis())
         # plot the traces
         # pm.summary(trace)
 
@@ -2836,7 +2836,7 @@ class LogLikeWithGrad(tt.Op):
         self.angle_scat = angle_scat
 
         # initialise the gradient Op (below)
-        self.logpgrad = LogLikeGrad(self.likelihood, self.data, self.x, self.sigma, self.tau, self.cal_var, self.angle_scat)
+        # self.logpgrad = LogLikeGrad(self.likelihood, self.data, self.x, self.sigma, self.tau, self.cal_var, self.angle_scat)
 
     def perform(self, node, inputs, outputs):
         # the method that is used when calling the Op
@@ -2847,62 +2847,62 @@ class LogLikeWithGrad(tt.Op):
 
         outputs[0][0] = np.array(logl) # output the log-likelihood
 
-    def grad(self, inputs, g):
-        # the method that calculates the gradients - it actually returns the
-        # vector-Jacobian product - g[0] is a vector of parameter values
-        theta, = inputs  # our parameters
-        return [g[0]*self.logpgrad(theta)]
+    # def grad(self, inputs, g):
+    #     # the method that calculates the gradients - it actually returns the
+    #     # vector-Jacobian product - g[0] is a vector of parameter values
+    #     theta, = inputs  # our parameters
+    #     return [g[0]*self.logpgrad(theta)]
 
 
-class LogLikeGrad(tt.Op):
+# class LogLikeGrad(tt.Op):
 
-    """
-    This Op will be called with a vector of values and also return a vector of
-    values - the gradients in each dimension.
-    """
-    itypes = [tt.dvector]
-    otypes = [tt.dvector]
+#     """
+#     This Op will be called with a vector of values and also return a vector of
+#     values - the gradients in each dimension.
+#     """
+#     itypes = [tt.dvector]
+#     otypes = [tt.dvector]
 
-    def __init__(self, loglike, data, x, sigma, tau, cal_var, angle_scat):
-        """
-        Initialise with various things that the function requires. Below
-        are the things that are needed in this particular example.
+#     def __init__(self, loglike, data, x, sigma, tau, cal_var, angle_scat):
+#         """
+#         Initialise with various things that the function requires. Below
+#         are the things that are needed in this particular example.
 
-        Parameters
-        ----------
-        loglike:
-            The log-likelihood (or whatever) function we've defined
-        data:
-            The "observed" data that our log-likelihood function takes in
-        x:
-            The dependent variable (aka 'x') that our model requires
-        sigma:
-            The noise standard deviation that out function requires.
-        """
+#         Parameters
+#         ----------
+#         loglike:
+#             The log-likelihood (or whatever) function we've defined
+#         data:
+#             The "observed" data that our log-likelihood function takes in
+#         x:
+#             The dependent variable (aka 'x') that our model requires
+#         sigma:
+#             The noise standard deviation that out function requires.
+#         """
 
-        # add inputs as class attributes
-        self.likelihood = loglike
-        self.data = data
-        self.x = x
-        self.sigma = sigma
-        self.tau = tau
-        self.cal_var = cal_var
-        self.angle_scat = angle_scat
+#         # add inputs as class attributes
+#         self.likelihood = loglike
+#         self.data = data
+#         self.x = x
+#         self.sigma = sigma
+#         self.tau = tau
+#         self.cal_var = cal_var
+#         self.angle_scat = angle_scat
 
-    def perform(self, node, inputs, outputs):
-        theta, = inputs
+#     def perform(self, node, inputs, outputs):
+#         theta, = inputs
 
-        # define version of likelihood function to pass to derivative function
-        def lnlike(values):
-            return self.likelihood(values, self.x, self.data, self.sigma, self.tau, self.cal_var, self.angle_scat)
+#         # define version of likelihood function to pass to derivative function
+#         def lnlike(values):
+#             return self.likelihood(values, self.x, self.data, self.sigma, self.tau, self.cal_var, self.angle_scat)
 
-        # calculate gradients
-        # grads = gradients(theta, lnlike)
-        grads = approx_fprime(theta, lnlike, epsilon=1)
-        # grads = approx_fprime(theta, lnlike, epsilon=100)
+#         # calculate gradients
+#         # grads = gradients(theta, lnlike)
+#         grads = approx_fprime(theta, lnlike, epsilon=1e-9)
+#         # grads = approx_fprime(theta, lnlike, epsilon=100)
         
 
-        outputs[0][0] = grads
+#         outputs[0][0] = grads
 
 
 if __name__ == '__main__':
